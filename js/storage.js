@@ -32,6 +32,7 @@ function defaultData() {
     categories: DEFAULT_CATEGORIES.map((c) => ({ ...c })),
     transactions: [],
     debts: [],
+    bills: [],
     budgetPlan: {},
     lastUpdated: new Date().toISOString(),
   };

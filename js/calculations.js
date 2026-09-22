@@ -89,3 +89,7 @@ function orderDebts(debts, strategy) {
   const ordered = strategy === "avalanche" ? orderDebtsAvalanche(active) : orderDebtsSnowball(active);
   return [...ordered, ...paidOff];
 }
+
+function findBillPayment(transactions, billId, monthKey) {
+  return transactions.find((t) => t.billId === billId && monthKeyOf(t.date) === monthKey);
+}

@@ -236,6 +236,16 @@ function handleViewClick(e) {
     case "open-add-debt": openDebtModal(null); break;
     case "edit-debt": openDebtModal(state.data.debts.find((d) => d.id === btn.dataset.id)); break;
     case "log-payment": openLogPaymentModal(state.data.debts.find((d) => d.id === btn.dataset.id)); break;
+    case "open-add-bill": openBillModal(null); break;
+    case "edit-bill": openBillModal(state.data.bills.find((b) => b.id === btn.dataset.id)); break;
+    case "mark-bill-paid": openMarkBillPaidModal(state.data.bills.find((b) => b.id === btn.dataset.id)); break;
+    case "undo-bill-payment":
+      confirmAction("Remove this payment record?", () => {
+        mutateData((d) => { d.transactions = d.transactions.filter((t) => t.id !== btn.dataset.txnId); });
+        closeModal();
+        showToast("Payment removed");
+      });
+      break;
     case "set-strategy": state.debtStrategy = btn.dataset.strategy; render(); break;
     case "open-add-category": openCategoryModal(null); break;
     case "edit-category": openCategoryModal(state.data.categories.find((c) => c.id === btn.dataset.id)); break;
@@ -355,6 +365,48 @@ function renderBudget() {
         <span>${formatMoney(totalActual)}</span>
       </div>
       <p class="help-text">Planned total: ${formatMoney(totalPlanned)}</p>
+    </div>
+    ${renderBillsSection()}
+  `;
+}
+
+function ordinal(n) {
+  const num = Number(n);
+  const v = num % 100;
+  if (v >= 11 && v <= 13) return num + "th";
+  switch (num % 10) {
+    case 1: return num + "st";
+    case 2: return num + "nd";
+    case 3: return num + "rd";
+    default: return num + "th";
+  }
+}
+
+function renderBillsSection() {
+  const bills = state.data.bills;
+
+  const rows = bills.map((b) => {
+    const paidTxn = findBillPayment(state.data.transactions, b.id, state.month);
+    return `
+      <div class="bill-item">
+        <div class="bill-main">
+          <div class="bill-name">${escapeHtml(b.name)}</div>
+          <div class="bill-meta">${formatMoney(b.amount)}${b.dueDay ? ` • Due on the ${ordinal(b.dueDay)}` : ""}</div>
+        </div>
+        ${paidTxn
+          ? `<span class="bill-paid-badge">✓ Paid ${formatMoney(paidTxn.amount)}</span>
+             <button class="btn btn-link" data-action="undo-bill-payment" data-id="${b.id}" data-txn-id="${paidTxn.id}">Undo</button>`
+          : `<button class="btn btn-primary" data-action="mark-bill-paid" data-id="${b.id}">Mark Paid</button>`}
+        <button class="btn btn-icon" data-action="edit-bill" data-id="${b.id}" aria-label="Edit bill">✏️</button>
+      </div>`;
+  }).join("");
+
+  return `
+    <div class="card">
+      <h2>🧾 Your Bills</h2>
+      <p class="help-text">Add each bill on its own so you can check it off as you pay it.</p>
+      ${bills.length ? rows : '<p class="empty-state">No bills added yet.</p>'}
+      <button class="btn btn-primary btn-large" style="margin-top:12px;" data-action="open-add-bill">+ Add a Bill</button>
     </div>
   `;
 }
@@ -796,6 +848,108 @@ function openLogPaymentModal(debt) {
     });
     closeModal();
     showToast("Payment logged");
+  });
+}
+
+function openBillModal(existing) {
+  const isEdit = !!existing;
+  const bill = existing || { name: "", amount: "", dueDay: "" };
+
+  openModal(`
+    <h2>${isEdit ? "Edit" : "Add"} Bill</h2>
+    <form id="bill-form">
+      <div class="form-group">
+        <label for="bill-name">Bill Name</label>
+        <input type="text" id="bill-name" value="${escapeHtml(bill.name)}" placeholder="e.g. Electric Bill" required>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label for="bill-amount">Usual Amount</label>
+          <input type="number" id="bill-amount" min="0" step="0.01" value="${bill.amount}" required>
+        </div>
+        <div class="form-group">
+          <label for="bill-due-day">Due Day (optional)</label>
+          <input type="number" id="bill-due-day" min="1" max="31" value="${bill.dueDay || ""}" placeholder="e.g. 15">
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="btn" data-action="modal-cancel">Cancel</button>
+        <button type="submit" class="btn btn-primary">${isEdit ? "Save" : "Add"}</button>
+      </div>
+      ${isEdit ? '<button type="button" class="btn btn-danger btn-large" style="margin-top:10px;" id="bill-delete-btn">Delete Bill</button>' : ""}
+    </form>
+  `);
+
+  byId("bill-form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const dueDayVal = byId("bill-due-day").value;
+    const updated = {
+      id: isEdit ? bill.id : uid(),
+      name: byId("bill-name").value.trim(),
+      amount: Math.abs(Number(byId("bill-amount").value) || 0),
+      dueDay: dueDayVal ? Math.min(31, Math.max(1, Math.round(Number(dueDayVal)))) : null,
+    };
+    mutateData((d) => {
+      if (isEdit) {
+        const idx = d.bills.findIndex((b) => b.id === bill.id);
+        if (idx > -1) d.bills[idx] = updated;
+      } else {
+        d.bills.push(updated);
+      }
+    });
+    closeModal();
+    showToast(isEdit ? "Bill updated" : "Bill added");
+  });
+
+  if (isEdit) {
+    byId("bill-delete-btn").addEventListener("click", () => {
+      confirmAction(`Delete "${bill.name}"? This won't delete payments you've already logged.`, () => {
+        mutateData((d) => { d.bills = d.bills.filter((b) => b.id !== bill.id); });
+        closeModal();
+        showToast("Bill deleted");
+      });
+    });
+  }
+}
+
+function openMarkBillPaidModal(bill) {
+  openModal(`
+    <h2>Mark Paid: ${escapeHtml(bill.name)}</h2>
+    <form id="bill-pay-form">
+      <div class="form-group">
+        <label for="bill-pay-date">Date</label>
+        <input type="date" id="bill-pay-date" value="${new Date().toISOString().slice(0, 10)}" required>
+      </div>
+      <div class="form-group">
+        <label for="bill-pay-amount">Amount</label>
+        <input type="number" id="bill-pay-amount" min="0.01" step="0.01" value="${bill.amount || ""}" required>
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="btn" data-action="modal-cancel">Cancel</button>
+        <button type="submit" class="btn btn-primary">Mark Paid</button>
+      </div>
+    </form>
+  `);
+
+  byId("bill-pay-form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const amount = Math.abs(Number(byId("bill-pay-amount").value) || 0);
+    const date = byId("bill-pay-date").value;
+    if (amount <= 0) return;
+    mutateData((d) => {
+      const billsCategory = d.categories.find((c) => c.id === "bills") || d.categories.find((c) => c.type === "expense");
+      d.transactions.push({
+        id: uid(),
+        type: "expense",
+        date,
+        categoryId: billsCategory ? billsCategory.id : "bills",
+        description: `Bill: ${bill.name}`,
+        amount,
+        billId: bill.id,
+      });
+    });
+    closeModal();
+    showToast("Bill marked as paid");
   });
 }
 

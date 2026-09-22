@@ -321,6 +321,29 @@ main#view-container {
 .txn-amount.income { color: var(--color-income); }
 .txn-actions { display: flex; gap: 4px; }
 
+.bill-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--color-border);
+  flex-wrap: wrap;
+}
+.bill-item:last-child { border-bottom: none; }
+.bill-main { flex: 1; min-width: 140px; }
+.bill-name { font-weight: 600; }
+.bill-meta { color: var(--color-text-muted); font-size: 0.9rem; }
+.bill-paid-badge {
+  display: inline-block;
+  color: var(--color-primary-dark);
+  background: var(--color-primary-tint);
+  font-weight: 600;
+  padding: 4px 12px;
+  border-radius: 20px;
+  font-size: 0.9rem;
+  white-space: nowrap;
+}
+
 .empty-state {
   text-align: center;
   color: var(--color-text-muted);
