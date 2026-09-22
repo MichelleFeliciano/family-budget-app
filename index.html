@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Our Family Budget</title>
+<link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+
+  <div id="lock-screen" class="lock-screen">
+    <div class="lock-card">
+      <h1>🔒 Our Family Budget</h1>
+
+      <form id="unlock-form">
+        <p id="lock-message">Enter the passphrase to continue.</p>
+        <input type="password" id="passphrase-input" placeholder="Passphrase" autocomplete="off" inputmode="text">
+        <button type="submit" id="unlock-btn" class="btn btn-primary btn-large">Unlock</button>
+        <p id="lock-error" class="error-text hidden"></p>
+      </form>
+
+      <form id="setup-form" class="hidden">
+        <p>No passphrase has been set up yet. Choose one now — you'll share it with whoever should have access.</p>
+        <input type="password" id="new-passphrase-1" placeholder="Choose a passphrase" autocomplete="off">
+        <input type="password" id="new-passphrase-2" placeholder="Type it again" autocomplete="off">
+        <button type="submit" id="save-passphrase-btn" class="btn btn-primary btn-large">Save Passphrase</button>
+        <p id="setup-error" class="error-text hidden"></p>
+      </form>
+
+      <details id="github-connect-details" style="margin-top:20px; text-align:left;">
+        <summary class="help-text">First time on this device? Connect to GitHub</summary>
+        <form id="gh-connect-form" style="margin-top:12px;">
+          <div class="form-group">
+            <label for="gh-owner">GitHub username</label>
+            <input type="text" id="gh-owner" placeholder="e.g. janedoe" autocomplete="off">
+          </div>
+          <div class="form-group">
+            <label for="gh-repo">Repository name</label>
+            <input type="text" id="gh-repo" placeholder="e.g. family-budget-app" autocomplete="off">
+          </div>
+          <div class="form-group">
+            <label for="gh-token">Access token</label>
+            <input type="password" id="gh-token" placeholder="Paste the token you were given" autocomplete="off">
+          </div>
+          <button type="submit" id="gh-connect-btn" class="btn btn-primary btn-large">Connect &amp; Sync</button>
+          <p id="gh-connect-status" class="help-text"></p>
+        </form>
+      </details>
+    </div>
+  </div>
+
+  <div id="app" class="app hidden">
+    <header class="app-header">
+      <h1>Our Family Budget</h1>
+      <div class="sync-status" id="sync-status">Ready</div>
+    </header>
+    <nav class="tabs" id="tabs">
+      <button data-view="dashboard" class="tab active">🏠 Home</button>
+      <button data-view="budget" class="tab">📊 Budget</button>
+      <button data-view="transactions" class="tab">🧾 Log</button>
+      <button data-view="debts" class="tab">💳 Debt</button>
+      <button data-view="settings" class="tab">⚙️ Settings</button>
+    </nav>
+    <main id="view-container"></main>
+  </div>
+
+  <div id="modal-root"></div>
+  <div id="toast-root"></div>
+
+  <script src="js/calculations.js"></script>
+  <script src="js/storage.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
