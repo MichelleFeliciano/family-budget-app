@@ -57,7 +57,17 @@
       "color": "var(--cat-other)"
     }
   ],
-  "transactions": [],
+  "transactions": [
+    {
+      "id": "muefdn7cwmndvm",
+      "type": "expense",
+      "date": "2026-09-04",
+      "categoryId": "bills",
+      "description": "Bill: Cell phone- AT&T",
+      "amount": 324.37,
+      "billId": "muefdaxzceabgs"
+    }
+  ],
   "debts": [],
   "bills": [
     {
@@ -97,5 +107,5 @@
     }
   ],
   "budgetPlan": {},
-  "lastUpdated": "2026-09-23T18:17:01.607Z"
+  "lastUpdated": "2026-09-23T18:17:17.496Z"
 }
