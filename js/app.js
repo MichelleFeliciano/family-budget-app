@@ -186,7 +186,12 @@ function wireLockScreen() {
       state.githubConfig = config;
       state.data = data;
       state.sha = sha;
-      statusEl.textContent = "Connected! " + (data.passphraseHash ? "Enter the passphrase above." : "No passphrase set yet — create one above.");
+      if (sha === null && state.data.passphraseHash) {
+        state.sha = await syncPush(config, state.data, null);
+        statusEl.textContent = "Connected! This device's data was backed up to GitHub.";
+      } else {
+        statusEl.textContent = "Connected! " + (data.passphraseHash ? "Enter the passphrase above." : "No passphrase set yet — create one above.");
+      }
       updateLockScreenMode();
       if (isUnlockedOnThisDevice() && state.data.passphraseHash) showApp();
     } catch (err) {
@@ -1019,8 +1024,13 @@ async function handleSaveGithubConfig() {
     state.githubConfig = config;
     state.data = data;
     state.sha = sha;
+    if (sha === null) {
+      state.sha = await syncPush(config, state.data, null);
+      showToast("Connected to GitHub — this device's data was backed up");
+    } else {
+      showToast("Connected to GitHub");
+    }
     setSyncStatus("ok", "Connected & synced");
-    showToast("Connected to GitHub");
     render();
   } catch (e) {
     console.error(e);
