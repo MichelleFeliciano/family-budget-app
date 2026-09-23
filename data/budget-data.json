@@ -99,6 +99,14 @@
       "categoryId": "income",
       "description": "Per Diem",
       "amount": 581
+    },
+    {
+      "id": "muefqj6hr9wue7",
+      "type": "income",
+      "date": "2026-09-18",
+      "categoryId": "income",
+      "description": "Daves check",
+      "amount": 5590.42
     }
   ],
   "debts": [],
@@ -140,5 +148,5 @@
     }
   ],
   "budgetPlan": {},
-  "lastUpdated": "2026-09-23T18:26:14.689Z"
+  "lastUpdated": "2026-09-23T18:27:18.810Z"
 }
