@@ -66,6 +66,15 @@
       "description": "Bill: Cell phone- AT&T",
       "amount": 324.37,
       "billId": "muefdaxzceabgs"
+    },
+    {
+      "id": "muefimo75pg2ck",
+      "type": "expense",
+      "date": "2026-09-01",
+      "categoryId": "bills",
+      "description": "Bill: Rent",
+      "amount": 2247.45,
+      "billId": "muef8n2vt03nh7"
     }
   ],
   "debts": [],
@@ -107,5 +116,5 @@
     }
   ],
   "budgetPlan": {},
-  "lastUpdated": "2026-09-23T18:20:48.087Z"
+  "lastUpdated": "2026-09-23T18:21:10.087Z"
 }
