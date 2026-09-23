@@ -87,8 +87,15 @@
       "categoryId": "bills",
       "amount": 2247,
       "dueDay": 1
+    },
+    {
+      "id": "muefdaxzceabgs",
+      "name": "Cell phone- AT&T",
+      "categoryId": "bills",
+      "amount": 324.37,
+      "dueDay": 4
     }
   ],
   "budgetPlan": {},
-  "lastUpdated": "2026-09-23T18:13:24.055Z"
+  "lastUpdated": "2026-09-23T18:17:01.607Z"
 }
