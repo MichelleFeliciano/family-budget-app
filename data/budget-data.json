@@ -75,6 +75,14 @@
       "description": "Bill: Rent",
       "amount": 2247.45,
       "billId": "muef8n2vt03nh7"
+    },
+    {
+      "id": "muefme0lkwxwlc",
+      "type": "income",
+      "date": "2026-09-03",
+      "categoryId": "income",
+      "description": "Dave’s check",
+      "amount": 664
     }
   ],
   "debts": [],
@@ -116,5 +124,5 @@
     }
   ],
   "budgetPlan": {},
-  "lastUpdated": "2026-09-23T18:21:10.087Z"
+  "lastUpdated": "2026-09-23T18:24:05.493Z"
 }
