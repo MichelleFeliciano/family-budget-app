@@ -68,15 +68,6 @@
       "billId": "muefdaxzceabgs"
     },
     {
-      "id": "muefh0n8yvv5zt",
-      "type": "expense",
-      "date": "2026-08-25",
-      "categoryId": "bills",
-      "description": "Bill: Rent",
-      "amount": 2247.45,
-      "billId": "muef8n2vt03nh7"
-    },
-    {
       "id": "muefhifstdi6xp",
       "type": "expense",
       "date": "2026-08-25",
@@ -125,5 +116,5 @@
     }
   ],
   "budgetPlan": {},
-  "lastUpdated": "2026-09-23T18:20:17.944Z"
+  "lastUpdated": "2026-09-23T18:20:35.247Z"
 }
