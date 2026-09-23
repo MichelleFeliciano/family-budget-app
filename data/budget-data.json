@@ -83,6 +83,14 @@
       "categoryId": "income",
       "description": "Dave’s check",
       "amount": 664
+    },
+    {
+      "id": "muefnmar7d8mji",
+      "type": "income",
+      "date": "2026-09-04",
+      "categoryId": "income",
+      "description": "Dave’s check",
+      "amount": 5466.52
     }
   ],
   "debts": [],
@@ -124,5 +132,5 @@
     }
   ],
   "budgetPlan": {},
-  "lastUpdated": "2026-09-23T18:24:05.493Z"
+  "lastUpdated": "2026-09-23T18:25:02.883Z"
 }
