@@ -103,8 +103,17 @@ function scheduleSync() {
       state.sha = newSha;
       setSyncStatus("ok", "Synced");
     } catch (e) {
-      console.error(e);
-      setSyncStatus("error", "Saved on this device (sync failed)");
+      console.error("Push failed, retrying after a fresh merge:", e);
+      try {
+        const { data, sha } = await syncPull(state.githubConfig);
+        state.data = data;
+        state.sha = await syncPush(state.githubConfig, state.data, sha);
+        setSyncStatus("ok", "Synced");
+        render();
+      } catch (retryErr) {
+        console.error(retryErr);
+        setSyncStatus("error", "Saved on this device (sync failed)");
+      }
     }
   }, 1200);
 }
@@ -246,7 +255,10 @@ function handleViewClick(e) {
     case "mark-bill-paid": openMarkBillPaidModal(state.data.bills.find((b) => b.id === btn.dataset.id)); break;
     case "undo-bill-payment":
       confirmAction("Remove this payment record?", () => {
-        mutateData((d) => { d.transactions = d.transactions.filter((t) => t.id !== btn.dataset.txnId); });
+        mutateData((d) => {
+          d.transactions = d.transactions.filter((t) => t.id !== btn.dataset.txnId);
+          d.tombstones.push(`transaction:${btn.dataset.txnId}`);
+        });
         closeModal();
         showToast("Payment removed");
       });
@@ -645,7 +657,10 @@ function openTransactionModal(existing) {
   if (isEdit) {
     byId("txn-delete-btn").addEventListener("click", () => {
       confirmAction("Delete this transaction?", () => {
-        mutateData((d) => { d.transactions = d.transactions.filter((t) => t.id !== txn.id); });
+        mutateData((d) => {
+          d.transactions = d.transactions.filter((t) => t.id !== txn.id);
+          d.tombstones.push(`transaction:${txn.id}`);
+        });
         closeModal();
         showToast("Transaction deleted");
       });
@@ -725,7 +740,10 @@ function openCategoryModal(existing) {
         ? `Some transactions use "${cat.name}". Deleting it won't remove those transactions, but they'll show as uncategorized. Continue?`
         : `Delete the "${cat.name}" category?`;
       confirmAction(msg, () => {
-        mutateData((d) => { d.categories = d.categories.filter((c) => c.id !== cat.id); });
+        mutateData((d) => {
+          d.categories = d.categories.filter((c) => c.id !== cat.id);
+          d.tombstones.push(`category:${cat.id}`);
+        });
         closeModal();
         showToast("Category deleted");
       });
@@ -808,7 +826,10 @@ function openDebtModal(existing) {
   if (isEdit) {
     byId("debt-delete-btn").addEventListener("click", () => {
       confirmAction(`Delete "${debt.name}"? This won't delete past transactions.`, () => {
-        mutateData((d) => { d.debts = d.debts.filter((x) => x.id !== debt.id); });
+        mutateData((d) => {
+          d.debts = d.debts.filter((x) => x.id !== debt.id);
+          d.tombstones.push(`debt:${debt.id}`);
+        });
         closeModal();
         showToast("Debt deleted");
       });
@@ -917,7 +938,10 @@ function openBillModal(existing) {
   if (isEdit) {
     byId("bill-delete-btn").addEventListener("click", () => {
       confirmAction(`Delete "${bill.name}"? This won't delete payments you've already logged.`, () => {
-        mutateData((d) => { d.bills = d.bills.filter((b) => b.id !== bill.id); });
+        mutateData((d) => {
+          d.bills = d.bills.filter((b) => b.id !== bill.id);
+          d.tombstones.push(`bill:${bill.id}`);
+        });
         closeModal();
         showToast("Bill deleted");
       });
