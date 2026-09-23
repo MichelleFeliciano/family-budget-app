@@ -1,0 +1,234 @@
+{
+  "version": 1,
+  "passphraseHash": "3cb7f72dab5ba2df95784a11cf25050d22a2fd3a01c3cee1eccc85db11e3d94f",
+  "categories": [
+    {
+      "id": "income",
+      "name": "Income",
+      "type": "income",
+      "color": "var(--cat-income)"
+    },
+    {
+      "id": "food",
+      "name": "Food & Groceries",
+      "type": "expense",
+      "color": "var(--cat-food)"
+    },
+    {
+      "id": "bills",
+      "name": "Bills & Utilities",
+      "type": "expense",
+      "color": "var(--cat-bills)"
+    },
+    {
+      "id": "debt",
+      "name": "Debt Payments",
+      "type": "expense",
+      "color": "var(--cat-debt)"
+    },
+    {
+      "id": "transportation",
+      "name": "Transportation",
+      "type": "expense",
+      "color": "var(--cat-transportation)"
+    },
+    {
+      "id": "healthcare",
+      "name": "Healthcare",
+      "type": "expense",
+      "color": "var(--cat-healthcare)"
+    },
+    {
+      "id": "savings",
+      "name": "Savings",
+      "type": "expense",
+      "color": "var(--cat-savings)"
+    },
+    {
+      "id": "personal",
+      "name": "Personal & Fun",
+      "type": "expense",
+      "color": "var(--cat-personal)"
+    },
+    {
+      "id": "other",
+      "name": "Other",
+      "type": "expense",
+      "color": "var(--cat-other)"
+    }
+  ],
+  "transactions": [],
+  "debts": [],
+  "bills": [
+    {
+      "id": "muealobkn6f47i",
+      "name": "Rent",
+      "amount": 2250,
+      "dueDay": null
+    },
+    {
+      "id": "muealobkhupugt",
+      "name": "Capital One 1",
+      "amount": 25,
+      "dueDay": null
+    },
+    {
+      "id": "muealobk9zpk8t",
+      "name": "NTTA",
+      "amount": 40,
+      "dueDay": null
+    },
+    {
+      "id": "muealobkuc19gc",
+      "name": "USAA",
+      "amount": 56,
+      "dueDay": null
+    },
+    {
+      "id": "muealobkrmixvv",
+      "name": "Capital One 2",
+      "amount": 65,
+      "dueDay": null
+    },
+    {
+      "id": "muealobk119qx7",
+      "name": "Capital One 3",
+      "amount": 150,
+      "dueDay": null
+    },
+    {
+      "id": "muealobkj9dbvv",
+      "name": "Comenity CapPay",
+      "amount": 43,
+      "dueDay": null
+    },
+    {
+      "id": "muealobkc83thz",
+      "name": "Capital One 4",
+      "amount": 125,
+      "dueDay": null
+    },
+    {
+      "id": "muealobkwtig46",
+      "name": "Chase",
+      "amount": 366,
+      "dueDay": null
+    },
+    {
+      "id": "muealobkn16rtp",
+      "name": "AT&T",
+      "amount": 324.37,
+      "dueDay": null
+    },
+    {
+      "id": "muealobkm5t99o",
+      "name": "Cap One Car",
+      "amount": 601.28,
+      "dueDay": null
+    },
+    {
+      "id": "muealobkcuulhs",
+      "name": "Disc. CapOne",
+      "amount": 657.09,
+      "dueDay": null
+    },
+    {
+      "id": "muealobk2l3qyc",
+      "name": "NFM",
+      "amount": 180,
+      "dueDay": null
+    },
+    {
+      "id": "muealobkd7x2m5",
+      "name": "Ring 1",
+      "amount": 21.64,
+      "dueDay": null
+    },
+    {
+      "id": "muealobki4r440",
+      "name": "Ring 2",
+      "amount": 19.99,
+      "dueDay": null
+    },
+    {
+      "id": "muealobkdl23ou",
+      "name": "Synchrony",
+      "amount": 260,
+      "dueDay": null
+    },
+    {
+      "id": "muealobkb6f950",
+      "name": "Google",
+      "amount": 5.4,
+      "dueDay": null
+    },
+    {
+      "id": "muealobkpzheba",
+      "name": "Uber",
+      "amount": 9.99,
+      "dueDay": null
+    },
+    {
+      "id": "muealobky17xgq",
+      "name": "Netflix",
+      "amount": 29.22,
+      "dueDay": null
+    },
+    {
+      "id": "muealobkvmh8vy",
+      "name": "Car Insurance",
+      "amount": 436.73,
+      "dueDay": null
+    },
+    {
+      "id": "muealobkjp79dn",
+      "name": "G. Life Insurance",
+      "amount": 53.21,
+      "dueDay": null
+    },
+    {
+      "id": "muealobkve41ui",
+      "name": "Electric",
+      "amount": 288.72,
+      "dueDay": null
+    },
+    {
+      "id": "muealobkzjrf1b",
+      "name": "Water",
+      "amount": 100.62,
+      "dueDay": null
+    },
+    {
+      "id": "muealobkguckly",
+      "name": "Gas",
+      "amount": 101.93,
+      "dueDay": null
+    },
+    {
+      "id": "muealobkle7r9l",
+      "name": "Amazon",
+      "amount": 0,
+      "dueDay": null
+    },
+    {
+      "id": "muealobklp7tyq",
+      "name": "Spotify",
+      "amount": 0,
+      "dueDay": null
+    },
+    {
+      "id": "muealobk4lb0as",
+      "name": "Paramount+",
+      "amount": 0,
+      "dueDay": null
+    },
+    {
+      "id": "muealobktxpojf",
+      "name": "Spectrum",
+      "amount": 0,
+      "dueDay": null
+    }
+  ],
+  "budgetPlan": {},
+  "lastUpdated": "2026-09-23T16:04:23.218Z"
+}
