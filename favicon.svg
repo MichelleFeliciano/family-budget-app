@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" role="img" aria-label="Piggy bank with leaf ears">
+  <path d="M30,132 C16,126 14,112 26,106 C32,103 36,110 32,115" fill="none" stroke="#3f6b34" stroke-width="5" stroke-linecap="round"/>
+  <ellipse cx="85" cy="130" rx="58" ry="44" fill="#3f6b34"/>
+  <circle cx="128" cy="94" r="44" fill="#3f6b34"/>
+  <circle cx="170" cy="108" r="23" fill="#3f6b34"/>
+  <path d="M140,82 Q150,102 148,122" stroke="#2c4d26" stroke-width="1.5" fill="none" opacity="0.3"/>
+  <g transform="translate(112,50) rotate(-18)">
+    <path d="M0,-30 C15,-22 19,4 0,28 C-19,4 -15,-22 0,-30 Z" fill="#9fb98a"/>
+    <line x1="0" y1="-25" x2="0" y2="24" stroke="#202417" stroke-width="1.2" opacity="0.35"/>
+  </g>
+  <g transform="translate(138,42) rotate(16)">
+    <path d="M0,-30 C15,-22 19,4 0,28 C-19,4 -15,-22 0,-30 Z" fill="#6b8e4e"/>
+    <line x1="0" y1="-25" x2="0" y2="24" stroke="#202417" stroke-width="1.2" opacity="0.35"/>
+  </g>
+  <rect x="99" y="50" width="26" height="6" rx="3" transform="rotate(-8 112 53)" fill="#202417"/>
+  <circle cx="149" cy="70" r="4.5" fill="#202417"/>
+  <circle cx="160" cy="75" r="4.5" fill="#202417"/>
+  <ellipse cx="183" cy="101" rx="3.5" ry="6.5" transform="rotate(25 183 101)" fill="#202417"/>
+  <ellipse cx="187" cy="113" rx="3.5" ry="6.5" transform="rotate(25 187 113)" fill="#202417"/>
+  <path d="M38,155 h16 v22 a8,7 0 0 1 -16,0 Z" fill="#3f6b34"/>
+  <ellipse cx="46" cy="181" rx="9" ry="5" fill="#f5f6ec"/>
+  <path d="M66,157 h16 v22 a8,7 0 0 1 -16,0 Z" fill="#3f6b34"/>
+  <ellipse cx="74" cy="183" rx="9" ry="5" fill="#f5f6ec"/>
+  <path d="M98,157 h16 v22 a8,7 0 0 1 -16,0 Z" fill="#3f6b34"/>
+  <ellipse cx="106" cy="183" rx="9" ry="5" fill="#f5f6ec"/>
+  <path d="M126,155 h16 v22 a8,7 0 0 1 -16,0 Z" fill="#3f6b34"/>
+  <ellipse cx="134" cy="181" rx="9" ry="5" fill="#f5f6ec"/>
+</svg>
