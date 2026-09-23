@@ -34,6 +34,7 @@ function defaultData() {
     debts: [],
     bills: [],
     budgetPlan: {},
+    tombstones: [],
     lastUpdated: new Date().toISOString(),
   };
 }
@@ -158,19 +159,62 @@ async function testGithubConnection(config) {
 }
 
 /**
- * Pull the latest shared data. Last-write-wins by lastUpdated timestamp:
- * whichever copy (local vs remote) is newer replaces the other. This is a
- * simple rule that is easy to reason about for two people editing the same
- * household budget; it does not attempt a field-by-field merge.
+ * Union-merge two lists of the same record type by id, so an addition on
+ * one device is never discarded just because the other device's copy has
+ * a newer overall timestamp. On an actual same-id collision (both sides
+ * edited the same existing record), `winner`'s version is kept.
  */
+function mergeArraysById(loser, winner) {
+  const map = new Map();
+  (loser || []).forEach((item) => map.set(item.id, item));
+  (winner || []).forEach((item) => map.set(item.id, item));
+  return Array.from(map.values());
+}
+
+function mergeBudgetPlan(loser, winner) {
+  const merged = {};
+  const months = new Set([...Object.keys(loser || {}), ...Object.keys(winner || {})]);
+  months.forEach((month) => {
+    merged[month] = { ...(loser && loser[month]), ...(winner && winner[month]) };
+  });
+  return merged;
+}
+
+/**
+ * Merge local and remote data instead of picking one wholesale. Records
+ * (categories/transactions/debts/bills) are unioned by id — deleting a
+ * record on one device only sticks once its id is recorded as a
+ * tombstone, since a plain union would otherwise let a stale copy on
+ * another device silently resurrect it.
+ */
+function mergeData(local, remote) {
+  const remoteNewer = new Date(remote.lastUpdated) > new Date(local.lastUpdated);
+  const winner = remoteNewer ? remote : local;
+  const loser = remoteNewer ? local : remote;
+
+  const tombstones = Array.from(new Set([...(loser.tombstones || []), ...(winner.tombstones || [])]));
+  const isDeleted = (type, id) => tombstones.includes(`${type}:${id}`);
+
+  return {
+    ...defaultData(),
+    passphraseHash: winner.passphraseHash || loser.passphraseHash || null,
+    categories: mergeArraysById(loser.categories, winner.categories).filter((c) => !isDeleted("category", c.id)),
+    transactions: mergeArraysById(loser.transactions, winner.transactions).filter((t) => !isDeleted("transaction", t.id)),
+    debts: mergeArraysById(loser.debts, winner.debts).filter((d) => !isDeleted("debt", d.id)),
+    bills: mergeArraysById(loser.bills, winner.bills).filter((b) => !isDeleted("bill", b.id)),
+    budgetPlan: mergeBudgetPlan(loser.budgetPlan, winner.budgetPlan),
+    tombstones,
+    lastUpdated: winner.lastUpdated,
+  };
+}
+
 async function syncPull(config) {
   const { data: remote, sha } = await githubFetchFile(config);
   const local = loadLocalData();
   if (!remote) return { data: local, sha: null };
-  const remoteNewer = new Date(remote.lastUpdated) > new Date(local.lastUpdated);
-  const winner = remoteNewer ? { ...defaultData(), ...remote } : local;
-  saveLocalData(winner);
-  return { data: winner, sha };
+  const merged = mergeData(local, remote);
+  saveLocalData(merged);
+  return { data: merged, sha };
 }
 
 async function syncPush(config, data, sha) {
