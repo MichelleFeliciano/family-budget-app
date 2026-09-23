@@ -91,6 +91,14 @@
       "categoryId": "income",
       "description": "Dave’s check",
       "amount": 5466.52
+    },
+    {
+      "id": "muefp5pdob335f",
+      "type": "income",
+      "date": "2026-09-11",
+      "categoryId": "income",
+      "description": "Per Diem",
+      "amount": 581
     }
   ],
   "debts": [],
@@ -132,5 +140,5 @@
     }
   ],
   "budgetPlan": {},
-  "lastUpdated": "2026-09-23T18:25:02.883Z"
+  "lastUpdated": "2026-09-23T18:26:14.689Z"
 }
