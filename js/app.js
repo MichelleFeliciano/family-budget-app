@@ -392,11 +392,14 @@ function renderBillsSection() {
 
   const rows = bills.map((b) => {
     const paidTxn = findBillPayment(state.data.transactions, b.id, state.month);
+    const cat = getCategory(b.categoryId) || getCategory("bills");
     return `
       <div class="bill-item">
         <div class="bill-main">
           <div class="bill-name">${escapeHtml(b.name)}</div>
-          <div class="bill-meta">${formatMoney(b.amount)}${b.dueDay ? ` • Due on the ${ordinal(b.dueDay)}` : ""}</div>
+          <div class="bill-meta">
+            <span class="cat-dot" style="background:${cat ? cat.color : "var(--cat-other)"}"></span>${cat ? escapeHtml(cat.name) : "Uncategorized"} • ${formatMoney(b.amount)}${b.dueDay ? ` • Due on the ${ordinal(b.dueDay)}` : ""}
+          </div>
         </div>
         ${paidTxn
           ? `<span class="bill-paid-badge">✓ Paid ${formatMoney(paidTxn.amount)}</span>
@@ -858,7 +861,7 @@ function openLogPaymentModal(debt) {
 
 function openBillModal(existing) {
   const isEdit = !!existing;
-  const bill = existing || { name: "", amount: "", dueDay: "" };
+  const bill = existing || { name: "", amount: "", dueDay: "", categoryId: "bills" };
 
   openModal(`
     <h2>${isEdit ? "Edit" : "Add"} Bill</h2>
@@ -866,6 +869,10 @@ function openBillModal(existing) {
       <div class="form-group">
         <label for="bill-name">Bill Name</label>
         <input type="text" id="bill-name" value="${escapeHtml(bill.name)}" placeholder="e.g. Electric Bill" required>
+      </div>
+      <div class="form-group">
+        <label for="bill-category">Category</label>
+        <select id="bill-category">${categoryOptions("expense", bill.categoryId || "bills")}</select>
       </div>
       <div class="form-row">
         <div class="form-group">
@@ -891,6 +898,7 @@ function openBillModal(existing) {
     const updated = {
       id: isEdit ? bill.id : uid(),
       name: byId("bill-name").value.trim(),
+      categoryId: byId("bill-category").value,
       amount: Math.abs(Number(byId("bill-amount").value) || 0),
       dueDay: dueDayVal ? Math.min(31, Math.max(1, Math.round(Number(dueDayVal)))) : null,
     };
@@ -942,12 +950,12 @@ function openMarkBillPaidModal(bill) {
     const date = byId("bill-pay-date").value;
     if (amount <= 0) return;
     mutateData((d) => {
-      const billsCategory = d.categories.find((c) => c.id === "bills") || d.categories.find((c) => c.type === "expense");
+      const cat = d.categories.find((c) => c.id === bill.categoryId) || d.categories.find((c) => c.id === "bills") || d.categories.find((c) => c.type === "expense");
       d.transactions.push({
         id: uid(),
         type: "expense",
         date,
-        categoryId: billsCategory ? billsCategory.id : "bills",
+        categoryId: cat ? cat.id : "bills",
         description: `Bill: ${bill.name}`,
         amount,
         billId: bill.id,
