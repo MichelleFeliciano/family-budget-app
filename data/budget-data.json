@@ -156,7 +156,7 @@
     {
       "id": "1a0d47d1eb6ac5jqp",
       "name": "NTTA",
-      "categoryId": "bills",
+      "categoryId": "debt",
       "amount": 40,
       "dueDay": null
     },
@@ -310,5 +310,5 @@
   ],
   "budgetPlan": {},
   "tombstones": [],
-  "lastUpdated": "2026-09-24T17:38:12.408Z"
+  "lastUpdated": "2026-09-24T17:38:19.330Z"
 }
