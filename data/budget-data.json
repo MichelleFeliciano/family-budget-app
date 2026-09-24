@@ -89,7 +89,7 @@
       "type": "income",
       "date": "2026-09-04",
       "categoryId": "income",
-      "description": "Dave’s check",
+      "description": "Dave\u00e2\u20ac\u2122s check",
       "amount": 5466.52
     },
     {
@@ -145,8 +145,169 @@
       "categoryId": "bills",
       "amount": 324.37,
       "dueDay": 4
+    },
+    {
+      "id": "1a0d47d1eab0iuhw3",
+      "name": "Capital One 1",
+      "categoryId": "bills",
+      "amount": 25.0,
+      "dueDay": null
+    },
+    {
+      "id": "1a0d47d1eb6ac5jqp",
+      "name": "NTTA",
+      "categoryId": "bills",
+      "amount": 40.0,
+      "dueDay": null
+    },
+    {
+      "id": "1a0d47d1ebev0df7h",
+      "name": "USAA",
+      "categoryId": "bills",
+      "amount": 56.0,
+      "dueDay": null
+    },
+    {
+      "id": "1a0d47d1ec7cxi8x9",
+      "name": "Capital One 2",
+      "categoryId": "bills",
+      "amount": 65.0,
+      "dueDay": null
+    },
+    {
+      "id": "1a0d47d1ed7en7ccc",
+      "name": "Capital One 3",
+      "categoryId": "bills",
+      "amount": 150.0,
+      "dueDay": null
+    },
+    {
+      "id": "1a0d47d1ee0tvzxnp",
+      "name": "Comenity CapPay",
+      "categoryId": "bills",
+      "amount": 43.0,
+      "dueDay": null
+    },
+    {
+      "id": "1a0d47d1ee84rg4ly",
+      "name": "Capital One 4",
+      "categoryId": "bills",
+      "amount": 125.0,
+      "dueDay": null
+    },
+    {
+      "id": "1a0d47d1ef81p6n98",
+      "name": "Chase",
+      "categoryId": "bills",
+      "amount": 366.0,
+      "dueDay": null
+    },
+    {
+      "id": "1a0d47d1f00q7eb1r",
+      "name": "Cap One Car",
+      "categoryId": "bills",
+      "amount": 601.28,
+      "dueDay": null
+    },
+    {
+      "id": "1a0d47d1f117716ei",
+      "name": "Disc. CapOne",
+      "categoryId": "bills",
+      "amount": 657.09,
+      "dueDay": null
+    },
+    {
+      "id": "1a0d47d1f1c4sis4d",
+      "name": "NFM",
+      "categoryId": "bills",
+      "amount": 180.0,
+      "dueDay": null
+    },
+    {
+      "id": "1a0d47d1f29exhjgi",
+      "name": "Ring 1",
+      "categoryId": "bills",
+      "amount": 21.64,
+      "dueDay": null
+    },
+    {
+      "id": "1a0d47d1f39asugu9",
+      "name": "Ring 2",
+      "categoryId": "bills",
+      "amount": 19.99,
+      "dueDay": null
+    },
+    {
+      "id": "1a0d47d1f43z2mb9b",
+      "name": "Synchrony",
+      "categoryId": "bills",
+      "amount": 260.0,
+      "dueDay": null
+    },
+    {
+      "id": "1a0d47d1f50jkhes9",
+      "name": "Google",
+      "categoryId": "bills",
+      "amount": 5.4,
+      "dueDay": null
+    },
+    {
+      "id": "1a0d47d1f5bzw79y4",
+      "name": "Uber",
+      "categoryId": "bills",
+      "amount": 9.99,
+      "dueDay": null
+    },
+    {
+      "id": "1a0d47d1f652lp50q",
+      "name": "Netflix",
+      "categoryId": "bills",
+      "amount": 29.22,
+      "dueDay": null
+    },
+    {
+      "id": "1a0d47d1f72xz22aa",
+      "name": "Car Insurance",
+      "categoryId": "bills",
+      "amount": 436.73,
+      "dueDay": null
+    },
+    {
+      "id": "1a0d47d1f83zonyv3",
+      "name": "G. Life Insurance",
+      "categoryId": "bills",
+      "amount": 53.21,
+      "dueDay": null
+    },
+    {
+      "id": "1a0d47d1f93iefpyd",
+      "name": "Amazon",
+      "categoryId": "bills",
+      "amount": 0,
+      "dueDay": null
+    },
+    {
+      "id": "1a0d47d1f9btbf3g7",
+      "name": "Spotify",
+      "categoryId": "bills",
+      "amount": 0,
+      "dueDay": null
+    },
+    {
+      "id": "1a0d47d1fa3h6bcsv",
+      "name": "Paramount+",
+      "categoryId": "bills",
+      "amount": 0,
+      "dueDay": null
+    },
+    {
+      "id": "1a0d47d1fb4cf5bv0",
+      "name": "Spectrum",
+      "categoryId": "bills",
+      "amount": 0,
+      "dueDay": null
     }
   ],
   "budgetPlan": {},
-  "lastUpdated": "2026-09-23T18:28:09.823Z"
+  "lastUpdated": "2026-09-24T17:36:05.000Z"
 }
