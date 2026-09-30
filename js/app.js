@@ -250,6 +250,7 @@ function handleViewClick(e) {
     case "open-add-debt": openDebtModal(null); break;
     case "edit-debt": openDebtModal(state.data.debts.find((d) => d.id === btn.dataset.id)); break;
     case "log-payment": openLogPaymentModal(state.data.debts.find((d) => d.id === btn.dataset.id)); break;
+    case "open-pay-schedule": openPayScheduleModal(); break;
     case "open-add-bill": openBillModal(null); break;
     case "edit-bill": openBillModal(state.data.bills.find((b) => b.id === btn.dataset.id)); break;
     case "mark-bill-paid": openMarkBillPaidModal(state.data.bills.find((b) => b.id === btn.dataset.id)); break;
@@ -383,8 +384,53 @@ function renderBudget() {
       </div>
       <p class="help-text">Planned total: ${formatMoney(totalPlanned)}</p>
     </div>
+    ${renderPayPeriodSection()}
     ${renderBillsSection()}
   `;
+}
+
+function formatShortDate(date) {
+  return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+function renderPayPeriodSection() {
+  const ps = state.data.paySchedule;
+  if (!ps) {
+    return `
+      <div class="card">
+        <h2>💰 Pay Period</h2>
+        <p class="help-text">Tell us when you get paid, and this will show which bills are due before your next paycheck.</p>
+        <button class="btn btn-primary btn-large" data-action="open-pay-schedule">Set Up Payday</button>
+      </div>`;
+  }
+
+  const result = getBillsDueInPeriod(state.data.bills, ps, new Date());
+  const total = result.due.reduce((sum, { bill }) => sum + Number(bill.amount || 0), 0);
+  const periodEndDisplay = new Date(result.end.getTime() - 86400000);
+
+  const rows = result.due.map(({ bill, date }) => {
+    const cat = getCategory(bill.categoryId) || getCategory("bills");
+    return `
+      <div class="bill-item">
+        <div class="bill-main">
+          <div class="bill-name">${escapeHtml(bill.name)}</div>
+          <div class="bill-meta">
+            <span class="cat-dot" style="background:${cat ? cat.color : "var(--cat-other)"}"></span>${cat ? escapeHtml(cat.name) : ""} • Due ${formatShortDate(date)}
+          </div>
+        </div>
+        <div class="txn-amount">${formatMoney(bill.amount)}</div>
+      </div>`;
+  }).join("");
+
+  return `
+    <div class="card">
+      <h2>💰 This Pay Period</h2>
+      <p class="help-text">${formatShortDate(result.start)} – ${formatShortDate(periodEndDisplay)} • Next payday ${formatShortDate(result.end)}</p>
+      ${result.due.length ? rows : '<p class="empty-state">No bills with a due date fall in this pay period.</p>'}
+      ${result.due.length ? `<div class="budget-total-row"><span>Total due</span><span>${formatMoney(total)}</span></div>` : ""}
+      ${result.noDueDay.length ? `<p class="help-text" style="margin-top:12px;">${result.noDueDay.length} bill${result.noDueDay.length === 1 ? "" : "s"} skipped here because they have no due date set: ${result.noDueDay.map((b) => escapeHtml(b.name)).join(", ")}</p>` : ""}
+      <button class="btn btn-link" data-action="open-pay-schedule">Change payday settings</button>
+    </div>`;
 }
 
 function ordinal(n) {
@@ -877,6 +923,53 @@ function openLogPaymentModal(debt) {
     });
     closeModal();
     showToast("Payment logged");
+  });
+}
+
+function openPayScheduleModal() {
+  const ps = state.data.paySchedule || { frequency: "biweekly", anchorDate: new Date().toISOString().slice(0, 10) };
+  const needsAnchor = (freq) => freq === "weekly" || freq === "biweekly" || freq === "monthly";
+
+  openModal(`
+    <h2>When do you get paid?</h2>
+    <form id="pay-schedule-form">
+      <div class="form-group">
+        <label for="pay-frequency">How often?</label>
+        <select id="pay-frequency">
+          <option value="weekly" ${ps.frequency === "weekly" ? "selected" : ""}>Weekly</option>
+          <option value="biweekly" ${ps.frequency === "biweekly" ? "selected" : ""}>Every 2 weeks</option>
+          <option value="semimonthly-1-15" ${ps.frequency === "semimonthly-1-15" ? "selected" : ""}>Twice a month (1st &amp; 15th)</option>
+          <option value="semimonthly-15-last" ${ps.frequency === "semimonthly-15-last" ? "selected" : ""}>Twice a month (15th &amp; last day)</option>
+          <option value="monthly" ${ps.frequency === "monthly" ? "selected" : ""}>Monthly</option>
+        </select>
+      </div>
+      <div class="form-group" id="pay-anchor-group" style="${needsAnchor(ps.frequency) ? "" : "display:none;"}">
+        <label for="pay-anchor-date">A recent payday</label>
+        <input type="date" id="pay-anchor-date" value="${ps.anchorDate || new Date().toISOString().slice(0, 10)}">
+        <p class="help-text">Any payday you actually got paid on works — we just use it to line up the schedule.</p>
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="btn" data-action="modal-cancel">Cancel</button>
+        <button type="submit" class="btn btn-primary">Save</button>
+      </div>
+    </form>
+  `);
+
+  byId("pay-frequency").addEventListener("change", () => {
+    byId("pay-anchor-group").style.display = needsAnchor(byId("pay-frequency").value) ? "" : "none";
+  });
+
+  byId("pay-schedule-form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const frequency = byId("pay-frequency").value;
+    const anchorDate = needsAnchor(frequency) ? byId("pay-anchor-date").value : null;
+    if (needsAnchor(frequency) && !anchorDate) {
+      showToast("Pick a payday date first.");
+      return;
+    }
+    mutateData((d) => { d.paySchedule = { frequency, anchorDate }; });
+    closeModal();
+    showToast("Payday settings saved");
   });
 }
 

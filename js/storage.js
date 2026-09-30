@@ -34,6 +34,7 @@ function defaultData() {
     debts: [],
     bills: [],
     budgetPlan: {},
+    paySchedule: null,
     tombstones: [],
     lastUpdated: new Date().toISOString(),
   };
