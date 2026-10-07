@@ -11,6 +11,7 @@ const state = {
   debtStrategy: "snowball",
   sha: null,
   saveTimer: null,
+  editSeq: 0,
 };
 
 /* ---------- Small helpers ---------- */
@@ -75,12 +76,14 @@ function confirmAction(message, onConfirm) {
 
 /* ---------- Data mutation + sync ---------- */
 
-function mutateData(fn) {
+function mutateData(fn, { render: shouldRender = true } = {}) {
   fn(state.data);
   state.data.lastUpdated = new Date().toISOString();
+  state.editSeq++;
   saveLocalData(state.data);
+  if (state.githubConfig) setDirty(true);
   scheduleSync();
-  render();
+  if (shouldRender) render();
 }
 
 function setSyncStatus(kind, text) {
@@ -98,9 +101,12 @@ function scheduleSync() {
   setSyncStatus("syncing", "Saving…");
   clearTimeout(state.saveTimer);
   state.saveTimer = setTimeout(async () => {
+    // Only mark "synced" if nothing was edited while this push was in flight.
+    const seq = state.editSeq;
+    const markPushed = () => { if (state.editSeq === seq) setDirty(false); };
     try {
-      const newSha = await syncPush(state.githubConfig, state.data, state.sha);
-      state.sha = newSha;
+      state.sha = await syncPush(state.githubConfig, state.data, state.sha);
+      markPushed();
       setSyncStatus("ok", "Synced");
     } catch (e) {
       console.error("Push failed, retrying after a fresh merge:", e);
@@ -108,11 +114,12 @@ function scheduleSync() {
         const { data, sha } = await syncPull(state.githubConfig);
         state.data = data;
         state.sha = await syncPush(state.githubConfig, state.data, sha);
+        markPushed();
         setSyncStatus("ok", "Synced");
         render();
       } catch (retryErr) {
         console.error(retryErr);
-        setSyncStatus("error", "Saved on this device (sync failed)");
+        setSyncStatus("error", describeSyncError(retryErr));
       }
     }
   }, 1200);
@@ -127,8 +134,10 @@ async function pullAndMergeSilently() {
     state.sha = sha;
     setSyncStatus("ok", "Synced");
     if (!byId("app").classList.contains("hidden")) render();
+    if (isDirty()) scheduleSync(); // changes from an earlier session or a failed save
   } catch (e) {
-    setSyncStatus("error", "Offline (using saved data)");
+    console.error(e);
+    setSyncStatus("error", describeSyncError(e));
   }
 }
 
@@ -147,7 +156,7 @@ function wireLockScreen() {
     const input = byId("passphrase-input").value;
     const hash = await sha256Hex(input);
     if (hash === state.data.passphraseHash) {
-      setUnlockedOnThisDevice(true);
+      setUnlockedOnThisDevice(hash);
       showApp();
     } else {
       byId("lock-error").textContent = "That passphrase is not correct.";
@@ -173,7 +182,7 @@ function wireLockScreen() {
     errEl.classList.add("hidden");
     const hash = await sha256Hex(p1);
     mutateData((d) => { d.passphraseHash = hash; });
-    setUnlockedOnThisDevice(true);
+    setUnlockedOnThisDevice(hash);
     showApp();
   });
 
@@ -202,7 +211,7 @@ function wireLockScreen() {
         statusEl.textContent = "Connected! " + (data.passphraseHash ? "Enter the passphrase above." : "No passphrase set yet — create one above.");
       }
       updateLockScreenMode();
-      if (isUnlockedOnThisDevice() && state.data.passphraseHash) showApp();
+      if (isUnlockedOnThisDevice(state.data.passphraseHash)) showApp();
     } catch (err) {
       console.error(err);
       statusEl.textContent = "Could not connect. Check the username, repository name, and token.";
@@ -230,6 +239,7 @@ function wireApp() {
   byId("modal-root").addEventListener("click", (e) => {
     if (e.target.closest('[data-action="modal-cancel"]')) closeModal();
   });
+  window.addEventListener("online", pullAndMergeSilently);
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible" && !byId("app").classList.contains("hidden")) {
       pullAndMergeSilently();
@@ -286,7 +296,19 @@ function handleViewChange(e) {
     mutateData((d) => {
       if (!d.budgetPlan[state.month]) d.budgetPlan[state.month] = {};
       d.budgetPlan[state.month][catId] = value;
-    });
+    }, { render: false });
+    // Redrawing the grid destroys the input the user is tabbing into, which
+    // dropped their place after every amount. Wait for focus to land on the
+    // next field, redraw, then put focus back on that same field.
+    setTimeout(() => {
+      const next = document.activeElement && document.activeElement.matches && document.activeElement.matches(".planned-input")
+        ? document.activeElement.dataset.categoryId : null;
+      render();
+      if (next) {
+        const again = byId("view-container").querySelector(`.planned-input[data-category-id="${next}"]`);
+        if (again) again.focus();
+      }
+    }, 0);
   }
   if (el.id === "import-file-input") {
     handleImportFile(el.files[0]);
@@ -405,8 +427,17 @@ function renderPayPeriodSection() {
   }
 
   const result = getBillsDueInPeriod(state.data.bills, ps, new Date());
-  const total = result.due.reduce((sum, { bill }) => sum + Number(bill.amount || 0), 0);
-  const periodEndDisplay = new Date(result.end.getTime() - 86400000);
+  if (!result) {
+    // Unrecognized or damaged pay schedule — offer to set it up again instead of breaking the whole tab.
+    return `
+      <div class="card">
+        <h2>💰 Pay Period</h2>
+        <p class="help-text">We couldn't read the saved payday settings. Please set them up again.</p>
+        <button class="btn btn-primary btn-large" data-action="open-pay-schedule">Set Up Payday</button>
+      </div>`;
+  }
+  const total = roundCents(result.due.reduce((sum, { bill }) => sum + Number(bill.amount || 0), 0));
+  const periodEndDisplay = lastDayOfPeriod(result.end);
 
   const rows = result.due.map(({ bill, date }) => {
     const cat = getCategory(bill.categoryId) || getCategory("bills");
@@ -627,7 +658,7 @@ function renderSettings() {
 
 function openTransactionModal(existing) {
   const isEdit = !!existing;
-  const txn = existing || { type: "expense", date: new Date().toISOString().slice(0, 10), categoryId: "", description: "", amount: "" };
+  const txn = existing || { type: "expense", date: todayISO(), categoryId: "", description: "", amount: "" };
   let currentType = txn.type;
 
   openModal(`
@@ -691,7 +722,7 @@ function openTransactionModal(existing) {
     mutateData((d) => {
       if (isEdit) {
         const idx = d.transactions.findIndex((t) => t.id === txn.id);
-        if (idx > -1) d.transactions[idx] = updated;
+        if (idx > -1) d.transactions[idx] = adjustDebtForTransactionChange(d, d.transactions[idx], updated);
       } else {
         d.transactions.push(updated);
       }
@@ -704,6 +735,8 @@ function openTransactionModal(existing) {
     byId("txn-delete-btn").addEventListener("click", () => {
       confirmAction("Delete this transaction?", () => {
         mutateData((d) => {
+          // A deleted debt payment gives its amount back to the debt's balance.
+          adjustDebtForTransactionChange(d, d.transactions.find((t) => t.id === txn.id), null);
           d.transactions = d.transactions.filter((t) => t.id !== txn.id);
           d.tombstones.push(`transaction:${txn.id}`);
         });
@@ -889,7 +922,7 @@ function openLogPaymentModal(debt) {
     <form id="payment-form">
       <div class="form-group">
         <label for="pay-date">Date</label>
-        <input type="date" id="pay-date" value="${new Date().toISOString().slice(0, 10)}" required>
+        <input type="date" id="pay-date" value="${todayISO()}" required>
       </div>
       <div class="form-group">
         <label for="pay-amount">Payment Amount</label>
@@ -909,7 +942,7 @@ function openLogPaymentModal(debt) {
     if (amount <= 0) return;
     mutateData((d) => {
       const debtCategory = d.categories.find((c) => c.id === "debt") || d.categories.find((c) => c.type === "expense");
-      d.transactions.push({
+      d.transactions.push(adjustDebtForTransactionChange(d, null, {
         id: uid(),
         type: "expense",
         date,
@@ -917,9 +950,7 @@ function openLogPaymentModal(debt) {
         description: `Payment: ${debt.name}`,
         amount,
         debtId: debt.id,
-      });
-      const target = d.debts.find((x) => x.id === debt.id);
-      if (target) target.currentBalance = Math.max(0, Number(target.currentBalance) - amount);
+      }));
     });
     closeModal();
     showToast("Payment logged");
@@ -927,7 +958,7 @@ function openLogPaymentModal(debt) {
 }
 
 function openPayScheduleModal() {
-  const ps = state.data.paySchedule || { frequency: "biweekly", anchorDate: new Date().toISOString().slice(0, 10) };
+  const ps = state.data.paySchedule || { frequency: "biweekly", anchorDate: todayISO() };
   const needsAnchor = (freq) => freq === "weekly" || freq === "biweekly" || freq === "monthly";
 
   openModal(`
@@ -945,7 +976,7 @@ function openPayScheduleModal() {
       </div>
       <div class="form-group" id="pay-anchor-group" style="${needsAnchor(ps.frequency) ? "" : "display:none;"}">
         <label for="pay-anchor-date">A recent payday</label>
-        <input type="date" id="pay-anchor-date" value="${ps.anchorDate || new Date().toISOString().slice(0, 10)}">
+        <input type="date" id="pay-anchor-date" value="${ps.anchorDate || todayISO()}">
         <p class="help-text">Any payday you actually got paid on works — we just use it to line up the schedule.</p>
       </div>
       <div class="modal-actions">
@@ -1048,7 +1079,7 @@ function openMarkBillPaidModal(bill) {
     <form id="bill-pay-form">
       <div class="form-group">
         <label for="bill-pay-date">Date</label>
-        <input type="date" id="bill-pay-date" value="${new Date().toISOString().slice(0, 10)}" required>
+        <input type="date" id="bill-pay-date" value="${todayISO()}" required>
       </div>
       <div class="form-group">
         <label for="bill-pay-amount">Amount</label>
@@ -1120,6 +1151,7 @@ function openChangePassphraseModal() {
     }
     const hash = await sha256Hex(p1);
     mutateData((d) => { d.passphraseHash = hash; });
+    setUnlockedOnThisDevice(hash);
     closeModal();
     showToast("Passphrase updated — remember to tell everyone who needs it.");
   });
@@ -1159,8 +1191,12 @@ async function handleSaveGithubConfig() {
     render();
   } catch (e) {
     console.error(e);
-    setSyncStatus("error", "Could not connect");
-    showToast("Could not connect — check the username, repo, and token.");
+    setSyncStatus("error", describeSyncError(e));
+    showToast(
+      e.status === 401 || e.status === 403 ? "That token was rejected — check it, and that it can read and write this repository."
+        : e.status === 404 ? "Repository not found — check the username and repository name (and that the token can see it)."
+        : "Could not connect — check your internet connection and the details above."
+    );
   }
 }
 
@@ -1173,9 +1209,10 @@ async function handleSyncNow() {
     state.sha = sha;
     setSyncStatus("ok", "Synced");
     render();
+    if (isDirty()) scheduleSync();
   } catch (e) {
     console.error(e);
-    setSyncStatus("error", "Could not sync");
+    setSyncStatus("error", describeSyncError(e));
   }
 }
 
@@ -1194,7 +1231,7 @@ function handleExportData() {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = `family-budget-backup-${new Date().toISOString().slice(0, 10)}.json`;
+  a.download = `family-budget-backup-${todayISO()}.json`;
   document.body.appendChild(a);
   a.click();
   a.remove();
@@ -1205,31 +1242,39 @@ function handleImportFile(file) {
   if (!file) return;
   const reader = new FileReader();
   reader.onload = () => {
+    let backup;
     try {
-      const parsed = JSON.parse(reader.result);
-      confirmAction("Replace all current data with this backup?", () => {
-        mutateData((d) => Object.assign(d, defaultData(), parsed));
-        closeModal();
-        showToast("Backup restored");
-      });
+      backup = validateBackup(reader.result);
     } catch (e) {
-      showToast("That file could not be read as a backup.");
+      showToast(e.message);
+      return;
     }
+    confirmAction("Replace all current data with this backup?", () => {
+      mutateData((d) => Object.assign(d, restoreFromBackup(d, backup)));
+      closeModal();
+      showToast("Backup restored");
+    });
   };
   reader.readAsText(file);
+  const input = byId("import-file-input");
+  if (input) input.value = ""; // lets the same file be chosen again
 }
 
 function handleResetData() {
-  confirmAction("This will erase all budget data on this device (and push the reset if connected to GitHub). This cannot be undone. Continue?", () => {
-    mutateData((d) => Object.assign(d, defaultData()));
-    setUnlockedOnThisDevice(false);
+  const message = state.githubConfig
+    ? "This erases this device's copy of the budget. Because this device is connected to GitHub, your data will download again the next time it syncs — it does not delete anything from GitHub. Continue?"
+    : "This erases all budget data on this device. This cannot be undone. Continue?";
+  confirmAction(message, () => {
+    saveLocalData(defaultData());
+    setDirty(false);
+    setUnlockedOnThisDevice(null);
     closeModal();
     location.reload();
   });
 }
 
 function handleLockNow() {
-  setUnlockedOnThisDevice(false);
+  setUnlockedOnThisDevice(null);
   location.reload();
 }
 
@@ -1242,7 +1287,7 @@ async function init() {
   wireApp();
   updateLockScreenMode();
 
-  if (isUnlockedOnThisDevice() && state.data.passphraseHash) {
+  if (isUnlockedOnThisDevice(state.data.passphraseHash)) {
     showApp();
   }
 
@@ -1253,13 +1298,14 @@ async function init() {
       state.data = data;
       state.sha = sha;
       setSyncStatus("ok", "Synced");
+      if (isDirty()) scheduleSync(); // unsent changes from last time
     } catch (e) {
       console.error(e);
-      setSyncStatus("error", "Offline (using saved data)");
+      setSyncStatus("error", describeSyncError(e));
     }
     updateLockScreenMode();
     if (byId("app").classList.contains("hidden")) {
-      if (isUnlockedOnThisDevice() && state.data.passphraseHash) showApp();
+      if (isUnlockedOnThisDevice(state.data.passphraseHash)) showApp();
     } else {
       render();
     }
@@ -1267,3 +1313,7 @@ async function init() {
 }
 
 document.addEventListener("DOMContentLoaded", init);
+
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => navigator.serviceWorker.register("sw.js").catch((e) => console.error("Offline support unavailable:", e)));
+}

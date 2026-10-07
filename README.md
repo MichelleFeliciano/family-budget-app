@@ -108,3 +108,15 @@ same way as step 3, and enter it on each device under Settings → GitHub
 Sync. Because the token only has Contents access to this one repository, a
 lost or leaked token can't be used to access anything else on your GitHub
 account.
+
+## For whoever maintains this
+
+Run the automated checks (Node 20+, nothing to install) with:
+
+```
+node tests/run-tests.js
+```
+
+They cover the budget and pay-period math (including evenings and
+daylight-saving changes), the GitHub sync merge logic, backup/restore, the
+offline service worker, and color contrast in light and dark mode.

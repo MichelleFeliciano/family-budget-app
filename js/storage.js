@@ -25,6 +25,10 @@ const DEFAULT_CATEGORIES = [
   { id: "other", name: "Other", type: "expense", color: "var(--cat-other)" },
 ];
 
+// An empty budget is "older than everything", so a brand-new device can never
+// overwrite real data already on GitHub when the two are merged.
+const EPOCH = "1970-01-01T00:00:00.000Z";
+
 function defaultData() {
   return {
     version: 1,
@@ -36,16 +40,71 @@ function defaultData() {
     budgetPlan: {},
     paySchedule: null,
     tombstones: [],
-    lastUpdated: new Date().toISOString(),
+    lastUpdated: EPOCH,
   };
+}
+
+/**
+ * Makes any parsed JSON safe to use: wrong-typed or missing fields fall back
+ * to defaults so a damaged file or a wrong backup can't crash every screen.
+ * Fields this version doesn't know about are kept.
+ */
+function sanitizeData(raw) {
+  const base = defaultData();
+  const src = raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
+  const records = (v) => (Array.isArray(v) ? v.filter((x) => x && typeof x === "object" && !Array.isArray(x)) : []);
+  const validDate = typeof src.lastUpdated === "string" && !isNaN(new Date(src.lastUpdated));
+  return {
+    ...src,
+    version: typeof src.version === "number" ? src.version : base.version,
+    passphraseHash: typeof src.passphraseHash === "string" && src.passphraseHash ? src.passphraseHash : null,
+    categories: Array.isArray(src.categories) ? records(src.categories) : base.categories,
+    transactions: records(src.transactions),
+    debts: records(src.debts),
+    bills: records(src.bills),
+    budgetPlan: src.budgetPlan && typeof src.budgetPlan === "object" && !Array.isArray(src.budgetPlan) ? src.budgetPlan : {},
+    paySchedule: src.paySchedule && typeof src.paySchedule === "object" && typeof src.paySchedule.frequency === "string" ? src.paySchedule : null,
+    tombstones: Array.isArray(src.tombstones) ? src.tombstones.filter((t) => typeof t === "string") : [],
+    lastUpdated: validDate ? src.lastUpdated : EPOCH,
+  };
+}
+
+/** Parses a backup file; throws a readable error if it isn't a budget backup. */
+function validateBackup(text) {
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch (e) {
+    throw new Error("That file isn't a valid backup.");
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed) || !Array.isArray(parsed.categories) || !Array.isArray(parsed.transactions)) {
+    throw new Error("That file doesn't look like a budget backup.");
+  }
+  return sanitizeData(parsed);
+}
+
+/**
+ * Applies a validated backup to the current data without losing the passphrase,
+ * and without letting old delete-markers immediately remove what was restored.
+ */
+function restoreFromBackup(current, backup) {
+  const keys = (d) => new Set([
+    ...d.categories.map((r) => `category:${r.id}`), ...d.transactions.map((r) => `transaction:${r.id}`),
+    ...d.debts.map((r) => `debt:${r.id}`), ...d.bills.map((r) => `bill:${r.id}`),
+  ]);
+  const present = keys(backup);
+  // Anything not in the backup is marked deleted, so "replace" really replaces
+  // even after the merge with GitHub; anything in the backup is un-deleted.
+  const removed = [...keys(current)].filter((k) => !present.has(k));
+  const tombstones = Array.from(new Set([...(current.tombstones || []), ...backup.tombstones, ...removed])).filter((t) => !present.has(t));
+  return { ...backup, passphraseHash: backup.passphraseHash || current.passphraseHash || null, tombstones };
 }
 
 function loadLocalData() {
   try {
     const raw = localStorage.getItem(LOCAL_DATA_KEY);
     if (!raw) return defaultData();
-    const parsed = JSON.parse(raw);
-    return { ...defaultData(), ...parsed };
+    return sanitizeData(JSON.parse(raw));
   } catch (e) {
     console.error("Failed to read local data, starting fresh.", e);
     return defaultData();
@@ -73,13 +132,35 @@ function clearGithubConfig() {
   localStorage.removeItem(LOCAL_CONFIG_KEY);
 }
 
-function isUnlockedOnThisDevice() {
-  return localStorage.getItem(LOCAL_UNLOCK_KEY) === "true";
+// A device stays unlocked only for the passphrase it was unlocked with, so
+// changing the passphrase locks out every other device until it's re-entered.
+function isUnlockedOnThisDevice(passphraseHash) {
+  const saved = localStorage.getItem(LOCAL_UNLOCK_KEY);
+  if (!saved || !passphraseHash) return false;
+  if (saved === "true") {
+    // Older versions stored a plain "true"; adopt the current passphrase once.
+    localStorage.setItem(LOCAL_UNLOCK_KEY, passphraseHash);
+    return true;
+  }
+  return saved === passphraseHash;
 }
 
-function setUnlockedOnThisDevice(value) {
-  if (value) localStorage.setItem(LOCAL_UNLOCK_KEY, "true");
+function setUnlockedOnThisDevice(passphraseHash) {
+  if (passphraseHash) localStorage.setItem(LOCAL_UNLOCK_KEY, passphraseHash);
   else localStorage.removeItem(LOCAL_UNLOCK_KEY);
+}
+
+// "Has changes GitHub hasn't confirmed yet" — survives closing the tab, so a
+// push that never ran (or failed) is retried the next time the app opens.
+const LOCAL_DIRTY_KEY = "familyBudget.unsynced";
+
+function isDirty() {
+  return localStorage.getItem(LOCAL_DIRTY_KEY) === "1";
+}
+
+function setDirty(value) {
+  if (value) localStorage.setItem(LOCAL_DIRTY_KEY, "1");
+  else localStorage.removeItem(LOCAL_DIRTY_KEY);
 }
 
 /* ---------- Passphrase hashing (UX gate only — see README for the
@@ -117,15 +198,35 @@ function githubApiUrl(config) {
   return `https://api.github.com/repos/${config.owner}/${config.repo}/contents/${DATA_PATH}`;
 }
 
+function githubError(message, status) {
+  const err = new Error(message);
+  err.status = status;
+  return err;
+}
+
+// Short, plain-language reason for the sync status line.
+function describeSyncError(err) {
+  const status = err && err.status;
+  if (status === 401 || status === 403) return "Token expired or rejected — update it in Settings";
+  if (status === 404) return "GitHub can't find the repository — check Settings";
+  if (status === 409 || status === 422) return "Saved here — will retry shortly";
+  if (!status) return "Offline — saved here, will sync later";
+  return `GitHub problem (${status}) — saved on this device`;
+}
+
 async function githubFetchFile(config) {
   const res = await fetch(githubApiUrl(config), {
+    // GitHub answers GETs with "Cache-Control: max-age=60"; without this the
+    // browser can hand back a minute-old copy and an out-of-date sha, which
+    // makes the next save fail.
+    cache: "no-store",
     headers: {
       Authorization: `Bearer ${config.token}`,
       Accept: "application/vnd.github+json",
     },
   });
   if (res.status === 404) return { data: null, sha: null };
-  if (!res.ok) throw new Error(`GitHub read failed (${res.status})`);
+  if (!res.ok) throw githubError(`GitHub read failed (${res.status})`, res.status);
   const json = await res.json();
   const data = JSON.parse(base64ToUtf8(json.content));
   return { data, sha: json.sha };
@@ -148,7 +249,7 @@ async function githubWriteFile(config, data, sha) {
   });
   if (!res.ok) {
     const msg = await res.text().catch(() => "");
-    throw new Error(`GitHub save failed (${res.status}): ${msg}`);
+    throw githubError(`GitHub save failed (${res.status}): ${msg}`, res.status);
   }
   const json = await res.json();
   return json.content.sha;
@@ -188,16 +289,21 @@ function mergeBudgetPlan(loser, winner) {
  * tombstone, since a plain union would otherwise let a stale copy on
  * another device silently resurrect it.
  */
-function mergeData(local, remote) {
+function mergeData(localRaw, remoteRaw) {
+  const local = sanitizeData(localRaw);
+  const remote = sanitizeData(remoteRaw);
   const remoteNewer = new Date(remote.lastUpdated) > new Date(local.lastUpdated);
   const winner = remoteNewer ? remote : local;
   const loser = remoteNewer ? local : remote;
 
-  const tombstones = Array.from(new Set([...(loser.tombstones || []), ...(winner.tombstones || [])]));
-  const isDeleted = (type, id) => tombstones.includes(`${type}:${id}`);
+  const tombstones = Array.from(new Set([...loser.tombstones, ...winner.tombstones]));
+  const deleted = new Set(tombstones);
+  const isDeleted = (type, id) => deleted.has(`${type}:${id}`);
 
   return {
-    ...defaultData(),
+    ...loser,
+    ...winner,
+    paySchedule: winner.paySchedule || loser.paySchedule || null,
     passphraseHash: winner.passphraseHash || loser.passphraseHash || null,
     categories: mergeArraysById(loser.categories, winner.categories).filter((c) => !isDeleted("category", c.id)),
     transactions: mergeArraysById(loser.transactions, winner.transactions).filter((t) => !isDeleted("transaction", t.id)),

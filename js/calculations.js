@@ -6,8 +6,33 @@ function monthKeyOf(dateStr) {
   return (dateStr || "").slice(0, 7); // "YYYY-MM-DD" -> "YYYY-MM"
 }
 
+function toLocalISODate(d) {
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+// Local calendar date. toISOString() is UTC, which is already "tomorrow" by
+// 7 pm in Texas — that put evening entries on the wrong day (or month).
+function todayISO() {
+  return toLocalISODate(new Date());
+}
+
 function currentMonthKey() {
-  return new Date().toISOString().slice(0, 7);
+  return todayISO().slice(0, 7);
+}
+
+// Whole calendar days, so a daylight-saving change can't leave a date at 1:00 am.
+function addDays(date, n) {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate() + n);
+}
+
+// A period's `end` is the next payday; the last day it covers is the day before.
+function lastDayOfPeriod(end) {
+  return addDays(end, -1);
+}
+
+function roundCents(n) {
+  return Math.round((Number(n) || 0) * 100) / 100;
 }
 
 function shiftMonthKey(monthKey, delta) {
@@ -23,24 +48,26 @@ function formatMonthLabel(monthKey) {
 }
 
 function formatMoney(amount) {
-  const n = Number(amount) || 0;
+  const n = roundCents(amount); // also turns float dust like -1e-14 into 0
   const sign = n < 0 ? "-" : "";
-  return sign + "$" + Math.abs(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return sign + "$" + Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 function sumTransactions(transactions, { monthKey, categoryId, type } = {}) {
-  return transactions
-    .filter((t) => (monthKey ? monthKeyOf(t.date) === monthKey : true))
-    .filter((t) => (categoryId ? t.categoryId === categoryId : true))
-    .filter((t) => (type ? t.type === type : true))
-    .reduce((sum, t) => sum + Number(t.amount || 0), 0);
+  return roundCents(
+    transactions
+      .filter((t) => (monthKey ? monthKeyOf(t.date) === monthKey : true))
+      .filter((t) => (categoryId ? t.categoryId === categoryId : true))
+      .filter((t) => (type ? t.type === type : true))
+      .reduce((sum, t) => sum + Number(t.amount || 0), 0)
+  );
 }
 
 function monthTotals(data, monthKey) {
   const income = sumTransactions(data.transactions, { monthKey, type: "income" });
   const expenses = sumTransactions(data.transactions, { monthKey, type: "expense" });
-  const debtRemaining = data.debts.reduce((sum, d) => sum + Math.max(0, Number(d.currentBalance || 0)), 0);
-  return { income, expenses, leftOver: income - expenses, debtRemaining };
+  const debtRemaining = roundCents(data.debts.reduce((sum, d) => sum + Math.max(0, Number(d.currentBalance || 0)), 0));
+  return { income, expenses, leftOver: roundCents(income - expenses), debtRemaining };
 }
 
 /**
@@ -94,6 +121,26 @@ function findBillPayment(transactions, billId, monthKey) {
   return transactions.find((t) => t.billId === billId && monthKeyOf(t.date) === monthKey);
 }
 
+/**
+ * Keeps a debt's balance in step with the payment transactions linked to it.
+ * Pass the old transaction (or null when logging a new one) and the new one
+ * (or null when deleting). Returns the new transaction with `debtApplied` set
+ * to what was really deducted, so an over-payment can be undone exactly.
+ */
+function adjustDebtForTransactionChange(data, oldTxn, newTxn) {
+  const debtFor = (t) => (t && t.debtId ? data.debts.find((d) => d.id === t.debtId) : null);
+  const oldDebt = debtFor(oldTxn);
+  if (oldDebt) {
+    const undone = Number(oldTxn.debtApplied !== undefined ? oldTxn.debtApplied : oldTxn.amount) || 0;
+    oldDebt.currentBalance = roundCents(Number(oldDebt.currentBalance || 0) + undone);
+  }
+  const newDebt = debtFor(newTxn);
+  if (!newDebt) return newTxn;
+  const applied = Math.min(Number(newTxn.amount) || 0, Number(newDebt.currentBalance) || 0);
+  newDebt.currentBalance = roundCents(Number(newDebt.currentBalance || 0) - applied);
+  return { ...newTxn, debtApplied: applied };
+}
+
 /* ---------- Pay period ----------
    All periods are computed as [start, end) with `end` being the exact
    next payday, so "days in this period" and "next payday" fall out of
@@ -106,16 +153,21 @@ function clampDayOfMonth(year, month, day) {
 
 function payPeriodRolling(anchorDateStr, stepDays, today) {
   const anchor = new Date(anchorDateStr + "T00:00:00");
-  const t = new Date(today.getFullYear(), today.getMonth(), today.getDate());
-  const diffDays = Math.round((t - anchor) / 86400000);
+  if (isNaN(anchor)) return null;
+  // Count calendar days with UTC arithmetic (no daylight-saving hours), then
+  // step with addDays so every period still starts at local midnight.
+  const diffDays = Math.round(
+    (Date.UTC(today.getFullYear(), today.getMonth(), today.getDate()) -
+      Date.UTC(anchor.getFullYear(), anchor.getMonth(), anchor.getDate())) / 86400000
+  );
   const periodsElapsed = Math.floor(diffDays / stepDays);
-  const start = new Date(anchor.getTime() + periodsElapsed * stepDays * 86400000);
-  const end = new Date(start.getTime() + stepDays * 86400000);
-  return { start, end };
+  const start = addDays(anchor, periodsElapsed * stepDays);
+  return { start, end: addDays(start, stepDays) };
 }
 
 function payPeriodMonthly(anchorDateStr, today) {
   const anchor = new Date(anchorDateStr + "T00:00:00");
+  if (isNaN(anchor)) return null;
   const payDay = anchor.getDate();
   const y = today.getFullYear();
   const m = today.getMonth();
