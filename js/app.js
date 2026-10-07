@@ -297,18 +297,17 @@ function handleViewChange(e) {
       if (!d.budgetPlan[state.month]) d.budgetPlan[state.month] = {};
       d.budgetPlan[state.month][catId] = value;
     }, { render: false });
-    // Redrawing the grid destroys the input the user is tabbing into, which
-    // dropped their place after every amount. Wait for focus to land on the
-    // next field, redraw, then put focus back on that same field.
-    setTimeout(() => {
-      const next = document.activeElement && document.activeElement.matches && document.activeElement.matches(".planned-input")
-        ? document.activeElement.dataset.categoryId : null;
-      render();
-      if (next) {
-        const again = byId("view-container").querySelector(`.planned-input[data-category-id="${next}"]`);
-        if (again) again.focus();
-      }
-    }, 0);
+    // Redrawing destroys the input the user is tabbing into, which dropped
+    // their place after every amount. Wait for focus to land on the next
+    // field, redraw, then put focus back on that same field.
+    setTimeout(renderKeepingFocus, 0);
+  }
+  if (el.matches(".bill-cat-select")) {
+    const billName = (state.data.bills.find((b) => b.id === el.dataset.billId) || {}).name;
+    let moved = null;
+    mutateData((d) => { moved = recategorizeBill(d, el.dataset.billId, el.value); }, { render: false });
+    setTimeout(renderKeepingFocus, 0);
+    if (moved !== null) showToast(moved > 0 ? `${billName} moved, along with ${moved} logged payment${moved === 1 ? "" : "s"}` : `${billName} moved to ${getCategory(el.value).name}`);
   }
   if (el.id === "import-file-input") {
     handleImportFile(el.files[0]);
@@ -316,6 +315,18 @@ function handleViewChange(e) {
 }
 
 /* ---------- Render dispatcher ---------- */
+
+// Redraws the screen, then puts keyboard focus back on the same control
+// (found by its data-focus-key) so editing in place doesn't lose your spot.
+function renderKeepingFocus() {
+  const active = document.activeElement;
+  const key = active && active.dataset ? active.dataset.focusKey : null;
+  render();
+  if (key) {
+    const again = byId("view-container").querySelector(`[data-focus-key="${CSS.escape(key)}"]`);
+    if (again) again.focus();
+  }
+}
 
 function render() {
   document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.dataset.view === state.view));
@@ -381,7 +392,7 @@ function renderBudget() {
       <div class="budget-row">
         <span class="cat-pill"><span class="cat-dot" style="background:${c.color}"></span><span>${escapeHtml(c.name)}</span></span>
         <input type="number" min="0" step="0.01" class="planned-input" value="${planned || ""}" placeholder="0.00"
-               data-category-id="${c.id}">
+               data-category-id="${c.id}" data-focus-key="plan:${c.id}">
         <span class="actual-amount">${formatMoney(actual)}</span>
         <div class="budget-track-row"><div class="bar-track"><div class="bar-fill" style="width:${pct}%; background:${barColor};"></div></div></div>
       </div>`;
@@ -481,14 +492,17 @@ function renderBillsSection() {
 
   const rows = bills.map((b) => {
     const paidTxn = findBillPayment(state.data.transactions, b.id, state.month);
-    const cat = getCategory(b.categoryId) || getCategory("bills");
+    // A bill with no category (or a deleted one) counts as Bills & Utilities, so show that in the dropdown too.
+    const cat = getCategory(b.categoryId) || getCategory("bills") || state.data.categories.find((c) => c.type === "expense");
     return `
       <div class="bill-item">
         <div class="bill-main">
           <div class="bill-name">${escapeHtml(b.name)}</div>
-          <div class="bill-meta">
-            <span class="cat-dot" style="background:${cat ? cat.color : "var(--cat-other)"}"></span>${cat ? escapeHtml(cat.name) : "Uncategorized"} • ${formatMoney(b.amount)}${b.dueDay ? ` • Due on the ${ordinal(b.dueDay)}` : ""}
-          </div>
+          <div class="bill-meta">${formatMoney(b.amount)}${b.dueDay ? ` • Due on the ${ordinal(b.dueDay)}` : ""}</div>
+          <label class="bill-cat">
+            <span class="cat-dot" style="background:${cat ? cat.color : "var(--cat-other)"}"></span>
+            <select class="bill-cat-select" data-bill-id="${b.id}" data-focus-key="bill:${b.id}" aria-label="Category for ${escapeHtml(b.name)}">${categoryOptions("expense", cat ? cat.id : "")}</select>
+          </label>
         </div>
         ${paidTxn
           ? `<span class="bill-paid-badge">✓ Paid ${formatMoney(paidTxn.amount)}</span>

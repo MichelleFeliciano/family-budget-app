@@ -391,3 +391,22 @@ test("offline: service worker falls back to the saved copy, and never touches Gi
   assert.equal(await ask({ method: "GET", url: "https://api.github.com/repos/o/r/contents/data/budget-data.json", mode: "cors" }), null, "GitHub API calls are not intercepted");
   assert.equal(await ask({ method: "PUT", url: base + "js/app.js", mode: "cors" }), null, "writes are not intercepted");
 });
+
+/* ------------------------------------------------------------------ */
+test("bill categories: changing a bill's category also moves its logged payments", () => {
+  const data = mk({
+    bills: [{ id: "b1", name: "Netflix", categoryId: "bills" }, { id: "b2", name: "Rent", categoryId: "bills" }],
+    transactions: [
+      { id: "t1", billId: "b1", categoryId: "bills" }, { id: "t2", billId: "b1", categoryId: "bills" },
+      { id: "t3", billId: "b2", categoryId: "bills" }, { id: "t4", categoryId: "bills" },
+    ],
+  });
+  assert.equal(recategorizeBill(data, "b1", "personal"), 2);
+  assert.equal(data.bills[0].categoryId, "personal");
+  assert.deepEqual(data.transactions.map((t) => t.categoryId), ["personal", "personal", "bills", "bills"], "only this bill's payments move");
+  assert.equal(recategorizeBill(data, "b1", "personal"), 0, "no change, nothing to move");
+  assert.equal(recategorizeBill(data, "b1", "income"), null, "income categories can't hold bills");
+  assert.equal(recategorizeBill(data, "b1", "no-such-category"), null);
+  assert.equal(recategorizeBill(data, "no-such-bill", "food"), null);
+  assert.equal(data.bills[0].categoryId, "personal", "rejected changes leave the bill alone");
+});

@@ -122,6 +122,23 @@ function findBillPayment(transactions, billId, monthKey) {
 }
 
 /**
+ * Moves a bill to another expense category, along with every payment already
+ * logged for it, so the budget grid never disagrees with the bill. Returns how
+ * many payments moved, or null if the bill or category isn't valid.
+ */
+function recategorizeBill(data, billId, categoryId) {
+  const bill = data.bills.find((b) => b.id === billId);
+  const category = data.categories.find((c) => c.id === categoryId);
+  if (!bill || !category || category.type !== "expense") return null;
+  bill.categoryId = categoryId;
+  let moved = 0;
+  data.transactions.forEach((t) => {
+    if (t.billId === billId && t.categoryId !== categoryId) { t.categoryId = categoryId; moved++; }
+  });
+  return moved;
+}
+
+/**
  * Keeps a debt's balance in step with the payment transactions linked to it.
  * Pass the old transaction (or null when logging a new one) and the new one
  * (or null when deleting). Returns the new transaction with `debtApplied` set
