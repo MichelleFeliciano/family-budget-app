@@ -1,122 +1,143 @@
 # Our Family Budget
 
-A simple, spreadsheet-like household budget app — built to be easy to read and
-easy to update, with large text and buttons. It works fully offline (all your
-data is saved right in the browser) and can optionally sync across devices
-through your own GitHub repository, so everyone always sees the same numbers.
+A simple, spreadsheet-like household budget — built to be easy to read and easy
+to update, with big text and big buttons. It works on phones, tablets and
+computers, keeps working with no internet, and syncs between everyone's devices
+through a **private** GitHub repository so everybody sees the same numbers.
 
-No accounts, no third-party servers, no ads, no analytics. The only network
-calls this app makes are to `api.github.com`, to save/load one data file in
-*your own* repository.
+No accounts to create, no ads, no analytics, no third-party servers. The only
+place the app ever talks to is `api.github.com`, to save and load one data file
+in your own private repository.
+
+## How it's put together (two repositories)
+
+| | What it holds | Visibility |
+|---|---|---|
+| **`family-budget-app`** | The app itself (this code). GitHub Pages publishes it as the website everyone opens. | Public — it contains no budget information |
+| **`family-budget-data`** | One file, `data/budget-data.json`: the actual budget. | **Private** |
+
+Keeping them separate is what keeps the budget private. The website is public,
+but the numbers are only reachable with the access token. Never connect the app
+to the public repository: the app will show a red warning if it detects that.
 
 ## What's inside
 
-- **Home** — this month's income, expenses, what's left over, and total debt.
-- **Budget** — a simple spreadsheet-style grid: type what you plan to spend
-  per category, and it shows what you've actually spent.
-- **Log** — every transaction (income or expense), add/edit any time.
-- **Debt** — track each debt's balance, see progress, and get a "focus this
-  one first" recommendation using either the *Snowball* (smallest balance
-  first) or *Avalanche* (highest interest first) method.
-- **Settings** — categories, GitHub sync, the passphrase, and backups.
+- **Home** — this month's income, spending, what's left over, and total debt.
+- **Budget** — plan how much to spend in each category and see what you've
+  actually spent. Below it:
+  - **This Pay Period** — tell it when you get paid (weekly, every 2 weeks,
+    twice a month, or monthly) and it lists the bills due before the next
+    paycheck, what's already paid, and how much is still to pay. You can mark
+    a bill paid right from there.
+  - **Your Bills** — each bill on its own with an amount, due day, and category
+    (change the category right in the list). Check bills off with *Mark Paid*,
+    sort the list by due day, name or category, and optionally link a bill to a
+    debt so paying it also lowers that debt's balance.
+- **Log** — every transaction, income or expense.
+- **Debt** — each debt's balance and progress, with a "focus this one first"
+  suggestion (*Snowball*: smallest first, or *Avalanche*: highest interest first).
+- **Settings** — GitHub sync, categories, passphrase, **text size** (Normal,
+  Large, Extra large — per device), backups, and locking a device.
 
-## Important: what the passphrase actually protects
+## Using it with no internet
 
-This is a **static site with no server**, hosted from a public repository.
-The passphrase is a friendly lock to keep casual visitors from opening the
-app and seeing your numbers — it is **not** real security. Anyone who really
-wanted to could read the app's own code (or the synced data file) and get
-around it. Don't put anything more sensitive in here than you'd be fine with
-being technically inspectable by someone determined enough. For a household
-budget, that's a normal and accepted trade-off for getting a free, adminless,
-cross-device app — just go in with the right expectation.
+After the first visit the app opens even with no connection, and your changes
+are kept on the device and synced the next time you're online. Open the site
+once while online (and, on a phone, "Add to Home Screen") to set this up.
 
-**If a passphrase is forgotten, it cannot be recovered** (it's stored only as
-a one-way scrambled hash, on purpose, so the real passphrase isn't sitting in
-plain text in a public repo). Whoever knows the current passphrase can change
-it any time from Settings → Passphrase. If nobody remembers it, the only way
-back in is Settings-level access isn't possible (you're locked out) — you'd
-need to clear the site's data in the browser and start over, which erases
-that device's local copy of the budget (a synced copy still exists in GitHub
-if any device was connected). Keep the passphrase written down somewhere
-safe, like you would a house key.
+## The passphrase — what it does and doesn't do
+
+The passphrase is a lock on the screen so that someone who picks up an unlocked
+phone can't just look at the budget. It is **not encryption**: it's checked in
+the page itself, and the budget is stored on each device as readable text. The
+real protection for the numbers is that they live in a private repository that
+needs the access token.
+
+- Changing the passphrase (Settings → Change Passphrase) **locks every other
+  device** until the new one is entered there.
+- A forgotten passphrase can't be looked up (only a scrambled version is
+  stored). If any device is still unlocked, use Settings → Change Passphrase.
+  If every device is locked: on github.com open `data/budget-data.json` in the
+  private data repository and change the `passphraseHash` value to `null`,
+  then on each device clear this site's data in the browser, reconnect, and
+  choose a new passphrase.
 
 ## One-time setup (you do this once)
 
-1. **Create the repository.** Push this folder to a new **public** GitHub
-   repository (e.g. `family-budget-app`).
-2. **Turn on GitHub Pages.** In the repo, go to *Settings → Pages*, and under
-   "Build and deployment" choose **Deploy from a branch**, branch `main`,
-   folder `/ (root)`. Save. GitHub will give you a URL like
-   `https://yourusername.github.io/family-budget-app/` — that's the link
-   everyone will use.
-3. **Create an access token** (this lets the app save data back to your
-   repo):
-   - Go to **github.com → Settings → Developer settings → Personal access
-     tokens → Fine-grained tokens → Generate new token**.
-   - Under **Resource owner**, pick yourself. Under **Repository access**,
-     choose **Only select repositories** and pick this one repo.
-   - Under **Permissions → Repository permissions**, set **Contents** to
-     **Read and write**. Leave everything else as "No access."
-   - Set an expiration (90 days is a reasonable default — you'll just
-     generate a new one and update it on each device when it expires).
-   - Generate the token and **copy it somewhere safe** — GitHub only shows
-     it once.
-4. **Open your Pages URL.** The app will ask you to set up a passphrase
-   first — choose one you'll share with your parents. Then expand
-   *"First time on this device? Connect to GitHub"* and enter your GitHub
-   username, the repository name, and the token from step 3. Once connected,
-   your passphrase and data will sync to the repo automatically from then on.
+1. **The app repository** is the public one that publishes the website. If you
+   are starting from scratch: push this folder to a new public repository, then
+   *Settings → Pages → Deploy from a branch → `master` / root*. GitHub gives
+   you the link everyone will use, like
+   `https://yourname.github.io/family-budget-app/`.
+2. **Create the data repository.** On GitHub, create a new repository named
+   `family-budget-data` and choose **Private**. Leave it empty.
+3. **Create an access token.** github.com → *Settings → Developer settings →
+   Personal access tokens → Fine-grained tokens → Generate new token*:
+   - *Repository access*: **Only select repositories** → `family-budget-data`
+     (just that one).
+   - *Permissions → Repository permissions → **Contents: Read and write***.
+     (*Metadata: Read-only* is added automatically; leave everything else off.)
+   - Pick an expiration (90 days works well) and **write the expiry date
+     down** — you'll give it to the app so it can remind you.
+   - Generate it and copy it right away; GitHub shows it only once.
+4. **Open the website** and choose a passphrase. Then open *"First time on this
+   device? Connect to GitHub"* and enter your GitHub username, the data
+   repository name (`family-budget-data`), the token, and (optional) the date
+   the token expires. Your budget now saves to the private repository.
 
 ## Setting up your parents' devices
 
-Give them three things: the Pages URL, the passphrase, and the access token
-from step 3 above (the same token works on multiple devices — it's tied to
-the repository, not the device).
+Give them the website link, the passphrase, and the token (plus the data
+repository name and your GitHub username). On each device:
 
-On each device, they should:
+1. Open the link and tap **"First time on this device? Connect to GitHub"**,
+   fill in the details, and tap **Connect & Sync**.
+2. Enter the passphrase and tap **Unlock**.
+3. In **Settings → Text Size**, choose a size that's comfortable.
 
-1. Open the link.
-2. Tap **"First time on this device? Connect to GitHub"**, and enter the
-   GitHub username, repository name, and token.
-3. Enter the passphrase and tap **Unlock**.
+After that the device stays unlocked and connected. Changes on any device show
+up on the others whenever there's a connection.
 
-After that, the device remembers it's unlocked and stays connected — they
-won't need to repeat this setup. Any changes made on one device sync to the
-others automatically whenever there's an internet connection; without one,
-everything keeps working from the last saved copy on that device.
+## When the token expires
+
+Fine-grained tokens stop working on their expiry date and GitHub doesn't let a
+web page read that date, so the app asks you for it (Settings → GitHub Sync →
+*Token expires on*). Two weeks before, a banner appears at the top: make a new
+token (step 3 above) and paste it into Settings → GitHub Sync on each device.
+If it lapses anyway, the status line at the top says *"Token expired or
+rejected"*. Nothing is lost while syncing is stopped — everything stays on the
+device and uploads once a working token is entered.
 
 ## Backups
 
-Settings → **Download Backup** saves a copy of all the data as a file.
-**Restore from Backup** loads one back in (this replaces everything current).
-It's worth doing this occasionally, and especially before big changes.
+Settings → **Download Backup** saves everything as a file. **Restore from
+Backup** replaces what's there with that file (your passphrase is kept). The
+private repository's history is also a running backup of every saved version.
 
-## If sync ever fails
+## If sync has trouble
 
-The app always saves to the device it's on first, so nothing is ever lost —
-a failed sync just means the other devices won't see the update yet. Check
-the internet connection and try **Settings → Sync Now**. If it still fails,
-the token may have expired (see step 3) — generate a new one and re-enter it
-under Settings → GitHub Sync on each device.
+The status line at the top says what's going on:
 
-## Rotating or revoking a token
+| It says | What it means |
+|---|---|
+| Synced | Everything is saved and shared. |
+| Offline — saved here, will sync later | No connection. Nothing is lost; it syncs when you're back online. |
+| Token expired or rejected | Enter a new token in Settings → GitHub Sync. |
+| GitHub can't find the repository | Check the username and repository name in Settings. |
+| Saved here — will retry shortly | Two devices saved at the same moment; it merges them and retries automatically. |
 
-If a device is lost, or a token expires, revoke it at **github.com →
-Settings → Developer settings → Fine-grained tokens**, generate a new one the
-same way as step 3, and enter it on each device under Settings → GitHub
-Sync. Because the token only has Contents access to this one repository, a
-lost or leaked token can't be used to access anything else on your GitHub
-account.
+Changes made on two devices at once are **merged**, not overwritten: bills,
+payments, and everything else added on each device are kept. Deletions are
+remembered so a deleted item doesn't come back.
 
 ## For whoever maintains this
 
-Run the automated checks (Node 20+, nothing to install) with:
-
-```
-node tests/run-tests.js
-```
-
-They cover the budget and pay-period math (including evenings and
-daylight-saving changes), the GitHub sync merge logic, backup/restore, the
-offline service worker, and color contrast in light and dark mode.
+- Run the automated checks (Node 20+, nothing to install): `node tests/run-tests.js`.
+  They cover the budget and pay-period math (including evenings and daylight
+  saving), the sync merge logic, backup/restore, the offline service worker, bill
+  and debt linking, and color contrast in light and dark mode.
+- Deploying is just pushing to `master`; GitHub Pages publishes it in about a
+  minute. Phones pick up the new version the next time the app is opened with a
+  connection.
+- `data/` is in `.gitignore` so budget data can never be committed to this
+  public repository by accident.

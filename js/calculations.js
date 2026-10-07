@@ -242,15 +242,83 @@ function billDueDatesInRange(dueDay, start, end) {
   return dates;
 }
 
-function getBillsDueInPeriod(bills, paySchedule, today) {
+function getBillsDueInPeriod(bills, paySchedule, today, transactions = []) {
   const period = getPayPeriod(paySchedule, today);
   if (!period) return null;
   const due = [];
   bills
     .filter((b) => b.dueDay)
     .forEach((b) => {
-      billDueDatesInRange(b.dueDay, period.start, period.end).forEach((date) => due.push({ bill: b, date }));
+      billDueDatesInRange(b.dueDay, period.start, period.end).forEach((date) => {
+        // Paid means a payment was logged in the month the bill falls due.
+        const paid = findBillPayment(transactions, b.id, toLocalISODate(date).slice(0, 7)) || null;
+        due.push({ bill: b, date, paid });
+      });
     });
   due.sort((a, b) => a.date - b.date);
-  return { ...period, due, noDueDay: bills.filter((b) => !b.dueDay) };
+  const sum = (items) => roundCents(items.reduce((total, { bill }) => total + Number(bill.amount || 0), 0));
+  return {
+    ...period,
+    due,
+    noDueDay: bills.filter((b) => !b.dueDay),
+    total: sum(due),
+    remaining: sum(due.filter((x) => !x.paid)),
+  };
+}
+
+/** Sorts bills for display: by due day (no due day last), by name, or by category. */
+function sortBills(bills, mode, categories = []) {
+  const name = (b) => String(b.name || "").toLowerCase();
+  const day = (b) => (b.dueDay ? Number(b.dueDay) : 99);
+  const catName = (b) => {
+    const c = categories.find((x) => x.id === b.categoryId) || categories.find((x) => x.id === "bills");
+    return c ? c.name.toLowerCase() : "";
+  };
+  const byName = (a, b) => name(a).localeCompare(name(b));
+  const compare = {
+    name: byName,
+    category: (a, b) => catName(a).localeCompare(catName(b)) || day(a) - day(b) || byName(a, b),
+    due: (a, b) => day(a) - day(b) || byName(a, b),
+  }[mode] || byName;
+  return [...bills].sort(compare);
+}
+
+/**
+ * Logs a payment for a bill. If the bill is linked to a debt, the payment also
+ * lowers that debt's balance (and is recorded so it can be undone exactly).
+ */
+function recordBillPayment(data, bill, date, amount, id) {
+  const category = data.categories.find((c) => c.id === bill.categoryId) || data.categories.find((c) => c.id === "bills") || data.categories.find((c) => c.type === "expense");
+  const txn = { id, type: "expense", date, categoryId: category ? category.id : "bills", description: `Bill: ${bill.name}`, amount, billId: bill.id };
+  if (bill.debtId && data.debts.some((d) => d.id === bill.debtId)) txn.debtId = bill.debtId;
+  const saved = adjustDebtForTransactionChange(data, null, txn);
+  data.transactions.push(saved);
+  return saved;
+}
+
+/** Deletes a transaction (giving any debt payment back to its balance) and marks it deleted for sync. */
+function removeTransaction(data, txnId) {
+  const txn = data.transactions.find((t) => t.id === txnId);
+  if (!txn) return false;
+  adjustDebtForTransactionChange(data, txn, null);
+  data.transactions = data.transactions.filter((t) => t.id !== txnId);
+  data.tombstones.push(`transaction:${txnId}`);
+  return true;
+}
+
+/**
+ * Reminder text for a GitHub token that expires on `expiresOn` (YYYY-MM-DD, as
+ * shown on GitHub). GitHub doesn't let a web page read the real expiry, so each
+ * device is told the date. Returns null when there's nothing to say yet.
+ */
+function tokenExpiryNotice(expiresOn, today, warnDays = 14) {
+  if (!expiresOn) return null;
+  const end = new Date(expiresOn + "T00:00:00");
+  if (isNaN(end)) return null;
+  const daysLeft = Math.round((Date.UTC(end.getFullYear(), end.getMonth(), end.getDate()) - Date.UTC(today.getFullYear(), today.getMonth(), today.getDate())) / 86400000);
+  const when = end.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  if (daysLeft < 0) return { level: "expired", daysLeft, message: `Your GitHub access token expired on ${when}, so syncing has stopped. Add a new token in Settings.` };
+  if (daysLeft === 0) return { level: "soon", daysLeft, message: "Your GitHub access token expires today. Add a new token in Settings." };
+  if (daysLeft <= warnDays) return { level: "soon", daysLeft, message: `Your GitHub access token expires in ${daysLeft} day${daysLeft === 1 ? "" : "s"} (${when}). Make a new one and add it in Settings before then.` };
+  return null;
 }

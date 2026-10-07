@@ -40,12 +40,16 @@
             <input type="text" id="gh-owner" placeholder="e.g. janedoe" autocomplete="off">
           </div>
           <div class="form-group">
-            <label for="gh-repo">Repository name</label>
+            <label for="gh-repo">Data repository name</label>
             <input type="text" id="gh-repo" placeholder="e.g. family-budget-app" autocomplete="off">
           </div>
           <div class="form-group">
             <label for="gh-token">Access token</label>
             <input type="password" id="gh-token" placeholder="Paste the token you were given" autocomplete="off">
+          </div>
+          <div class="form-group">
+            <label for="gh-expires">Token expires on (optional)</label>
+            <input type="date" id="gh-expires">
           </div>
           <button type="submit" id="gh-connect-btn" class="btn btn-primary btn-large">Connect &amp; Sync</button>
           <p id="gh-connect-status" class="help-text"></p>
@@ -62,6 +66,7 @@
       </div>
       <div class="sync-status" id="sync-status">Ready</div>
     </header>
+    <div id="alert-banner" class="token-banner hidden" role="alert"></div>
     <nav class="tabs" id="tabs">
       <button data-view="dashboard" class="tab active"><span class="tab-icon" aria-hidden="true">🏠</span><span class="tab-label">Home</span></button>
       <button data-view="budget" class="tab"><span class="tab-icon" aria-hidden="true">📊</span><span class="tab-label">Budget</span></button>

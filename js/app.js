@@ -12,6 +12,8 @@ const state = {
   sha: null,
   saveTimer: null,
   editSeq: 0,
+  billSort: getBillSort(),
+  repoPublic: null, // true when the GitHub repository holding the budget is public
 };
 
 /* ---------- Small helpers ---------- */
@@ -197,11 +199,12 @@ function wireLockScreen() {
       return;
     }
     statusEl.textContent = "Connecting…";
-    const config = { owner, repo, token };
+    const config = { owner, repo, token, tokenExpires: byId("gh-expires").value || null };
     try {
       const { data, sha } = await syncPull(config);
       saveGithubConfig(config);
       state.githubConfig = config;
+      checkRepoVisibility(true);
       state.data = data;
       state.sha = sha;
       if (sha === null && state.data.passphraseHash) {
@@ -263,13 +266,10 @@ function handleViewClick(e) {
     case "open-pay-schedule": openPayScheduleModal(); break;
     case "open-add-bill": openBillModal(null); break;
     case "edit-bill": openBillModal(state.data.bills.find((b) => b.id === btn.dataset.id)); break;
-    case "mark-bill-paid": openMarkBillPaidModal(state.data.bills.find((b) => b.id === btn.dataset.id)); break;
+    case "mark-bill-paid": openMarkBillPaidModal(state.data.bills.find((b) => b.id === btn.dataset.id), btn.dataset.due); break;
     case "undo-bill-payment":
       confirmAction("Remove this payment record?", () => {
-        mutateData((d) => {
-          d.transactions = d.transactions.filter((t) => t.id !== btn.dataset.txnId);
-          d.tombstones.push(`transaction:${btn.dataset.txnId}`);
-        });
+        mutateData((d) => { removeTransaction(d, btn.dataset.txnId); });
         closeModal();
         showToast("Payment removed");
       });
@@ -284,6 +284,7 @@ function handleViewClick(e) {
     case "export-data": handleExportData(); break;
     case "trigger-import": byId("import-file-input").click(); break;
     case "reset-data": handleResetData(); break;
+    case "set-text-size": setTextSize(btn.dataset.size); applyTextSize(); render(); break;
     case "lock-now": handleLockNow(); break;
   }
 }
@@ -302,6 +303,11 @@ function handleViewChange(e) {
     // field, redraw, then put focus back on that same field.
     setTimeout(renderKeepingFocus, 0);
   }
+  if (el.id === "bill-sort-select") {
+    state.billSort = el.value;
+    setBillSort(el.value);
+    renderKeepingFocus();
+  }
   if (el.matches(".bill-cat-select")) {
     const billName = (state.data.bills.find((b) => b.id === el.dataset.billId) || {}).name;
     let moved = null;
@@ -312,6 +318,39 @@ function handleViewChange(e) {
   if (el.id === "import-file-input") {
     handleImportFile(el.files[0]);
   }
+}
+
+/* ---------- Alerts, text size, repository safety ---------- */
+
+// One banner at the top of the app for things that need attention.
+function updateAlertBanner() {
+  const banner = byId("alert-banner");
+  if (!banner) return;
+  const notes = [];
+  if (state.repoPublic) {
+    notes.push({ red: true, text: "Your budget is saved in a PUBLIC GitHub repository, so anyone can read it. Switch to a private repository in Settings." });
+  }
+  const notice = state.githubConfig ? tokenExpiryNotice(state.githubConfig.tokenExpires, new Date()) : null;
+  if (notice) notes.push({ red: notice.level === "expired", text: notice.message });
+  banner.classList.toggle("hidden", notes.length === 0);
+  banner.classList.toggle("expired", notes.some((n) => n.red));
+  banner.innerHTML = notes.map((n) => `<div>${escapeHtml(n.text)}</div>`).join("");
+}
+
+function applyTextSize() {
+  const size = getTextSize();
+  if (size === "normal") delete document.documentElement.dataset.textSize;
+  else document.documentElement.dataset.textSize = size;
+}
+
+// Asks GitHub whether the repository holding the budget is public. Only ever
+// warns; if GitHub can't say, nothing is shown.
+async function checkRepoVisibility(announce) {
+  if (!state.githubConfig) { state.repoPublic = null; return; }
+  const isPublic = await githubRepoIsPublic(state.githubConfig);
+  state.repoPublic = isPublic === true;
+  if (isPublic === true && announce) showToast("Warning: that repository is public — anyone can read your budget.");
+  if (!byId("app").classList.contains("hidden")) render();
 }
 
 /* ---------- Render dispatcher ---------- */
@@ -329,6 +368,7 @@ function renderKeepingFocus() {
 }
 
 function render() {
+  updateAlertBanner();
   document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.dataset.view === state.view));
   const container = byId("view-container");
   if (state.view === "dashboard") container.innerHTML = renderDashboard();
@@ -437,7 +477,7 @@ function renderPayPeriodSection() {
       </div>`;
   }
 
-  const result = getBillsDueInPeriod(state.data.bills, ps, new Date());
+  const result = getBillsDueInPeriod(state.data.bills, ps, new Date(), state.data.transactions);
   if (!result) {
     // Unrecognized or damaged pay schedule — offer to set it up again instead of breaking the whole tab.
     return `
@@ -447,29 +487,32 @@ function renderPayPeriodSection() {
         <button class="btn btn-primary btn-large" data-action="open-pay-schedule">Set Up Payday</button>
       </div>`;
   }
-  const total = roundCents(result.due.reduce((sum, { bill }) => sum + Number(bill.amount || 0), 0));
   const periodEndDisplay = lastDayOfPeriod(result.end);
 
-  const rows = result.due.map(({ bill, date }) => {
+  const rows = result.due.map(({ bill, date, paid }) => {
     const cat = getCategory(bill.categoryId) || getCategory("bills");
     return `
-      <div class="bill-item">
+      <div class="bill-item${paid ? " is-paid" : ""}">
         <div class="bill-main">
           <div class="bill-name">${escapeHtml(bill.name)}</div>
           <div class="bill-meta">
-            <span class="cat-dot" style="background:${cat ? cat.color : "var(--cat-other)"}"></span>${cat ? escapeHtml(cat.name) : ""} • Due ${formatShortDate(date)}
+            <span class="cat-dot" style="background:${cat ? cat.color : "var(--cat-other)"}"></span>${cat ? escapeHtml(cat.name) : ""} • Due ${formatShortDate(date)} • ${formatMoney(bill.amount)}
           </div>
         </div>
-        <div class="txn-amount">${formatMoney(bill.amount)}</div>
+        ${paid
+          ? `<span class="bill-paid-badge">✓ Paid ${formatMoney(paid.amount)}</span>`
+          : `<button class="btn btn-primary" data-action="mark-bill-paid" data-id="${bill.id}" data-due="${toLocalISODate(date)}">Mark Paid</button>`}
       </div>`;
   }).join("");
+  const allPaid = result.due.length > 0 && result.remaining === 0;
 
   return `
     <div class="card">
       <h2>💰 This Pay Period</h2>
       <p class="help-text">${formatShortDate(result.start)} – ${formatShortDate(periodEndDisplay)} • Next payday ${formatShortDate(result.end)}</p>
       ${result.due.length ? rows : '<p class="empty-state">No bills with a due date fall in this pay period.</p>'}
-      ${result.due.length ? `<div class="budget-total-row"><span>Total due</span><span>${formatMoney(total)}</span></div>` : ""}
+      ${result.due.length ? `<div class="budget-total-row"><span>${allPaid ? "All paid ✓" : "Still to pay"}</span><span>${formatMoney(result.remaining)}</span></div>
+      <p class="help-text">Total due this pay period: ${formatMoney(result.total)}</p>` : ""}
       ${result.noDueDay.length ? `<p class="help-text" style="margin-top:12px;">${result.noDueDay.length} bill${result.noDueDay.length === 1 ? "" : "s"} skipped here because they have no due date set: ${result.noDueDay.map((b) => escapeHtml(b.name)).join(", ")}</p>` : ""}
       <button class="btn btn-link" data-action="open-pay-schedule">Change payday settings</button>
     </div>`;
@@ -488,14 +531,14 @@ function ordinal(n) {
 }
 
 function renderBillsSection() {
-  const bills = state.data.bills;
+  const bills = sortBills(state.data.bills, state.billSort, state.data.categories);
 
   const rows = bills.map((b) => {
     const paidTxn = findBillPayment(state.data.transactions, b.id, state.month);
     // A bill with no category (or a deleted one) counts as Bills & Utilities, so show that in the dropdown too.
     const cat = getCategory(b.categoryId) || getCategory("bills") || state.data.categories.find((c) => c.type === "expense");
     return `
-      <div class="bill-item">
+      <div class="bill-item${paidTxn ? " is-paid" : ""}">
         <div class="bill-main">
           <div class="bill-name">${escapeHtml(b.name)}</div>
           <div class="bill-meta">${formatMoney(b.amount)}${b.dueDay ? ` • Due on the ${ordinal(b.dueDay)}` : ""}</div>
@@ -516,6 +559,10 @@ function renderBillsSection() {
     <div class="card">
       <h2>🧾 Your Bills</h2>
       <p class="help-text">Add each bill on its own so you can check it off as you pay it.</p>
+      ${bills.length > 1 ? `<div class="bill-sort"><label for="bill-sort-select">Sort by</label>
+        <select id="bill-sort-select" data-focus-key="bill-sort">
+          ${[["due", "Due day"], ["name", "Name"], ["category", "Category"]].map(([v, l]) => `<option value="${v}" ${state.billSort === v ? "selected" : ""}>${l}</option>`).join("")}
+        </select></div>` : ""}
       ${bills.length ? rows : '<p class="empty-state">No bills added yet.</p>'}
       <button class="btn btn-primary btn-large" style="margin-top:12px;" data-action="open-add-bill">+ Add a Bill</button>
     </div>
@@ -617,17 +664,23 @@ function renderSettings() {
         <span class="status-dot ${statusOk ? "ok" : ""}"></span>
         <span>${statusOk ? `Connected to ${escapeHtml(gh.owner)}/${escapeHtml(gh.repo)}` : "Not connected — data is only saved on this device"}</span>
       </div>
+      ${state.repoPublic ? '<div class="repo-warning">⚠️ This repository is PUBLIC — anyone on the internet can read your budget. Create a private repository for your data and connect to that instead.</div>' : ""}
       <div class="form-group">
         <label for="set-gh-owner">GitHub username</label>
         <input type="text" id="set-gh-owner" value="${gh ? escapeHtml(gh.owner) : ""}">
       </div>
       <div class="form-group">
-        <label for="set-gh-repo">Repository name</label>
+        <label for="set-gh-repo">Data repository name</label>
         <input type="text" id="set-gh-repo" value="${gh ? escapeHtml(gh.repo) : ""}">
       </div>
       <div class="form-group">
         <label for="set-gh-token">Access token</label>
         <input type="password" id="set-gh-token" placeholder="${gh ? "Leave blank to keep current token" : ""}">
+      </div>
+      <div class="form-group">
+        <label for="set-gh-expires">Token expires on (optional)</label>
+        <input type="date" id="set-gh-expires" value="${gh && gh.tokenExpires ? escapeHtml(gh.tokenExpires) : ""}">
+        <p class="help-text">GitHub shows this date when you make the token. We'll remind you two weeks before it runs out.</p>
       </div>
       <div style="display:flex; gap:10px; flex-wrap:wrap;">
         <button class="btn btn-primary" data-action="save-github-config">Save &amp; Connect</button>
@@ -654,6 +707,14 @@ function renderSettings() {
         <button class="btn" data-action="trigger-import">Restore from Backup</button>
         <input type="file" id="import-file-input" accept="application/json" class="hidden">
       </div>
+    </div>
+
+    <div class="settings-section">
+      <h2>🔠 Text Size</h2>
+      <div class="text-size-options">
+        ${[["normal", "Normal"], ["large", "Large"], ["xlarge", "Extra large"]].map(([v, l]) => `<button class="btn ${getTextSize() === v ? "active" : ""}" data-action="set-text-size" data-size="${v}">${l}</button>`).join("")}
+      </div>
+      <p class="help-text">Makes everything bigger. This applies to this device only.</p>
     </div>
 
     <div class="settings-section">
@@ -748,12 +809,7 @@ function openTransactionModal(existing) {
   if (isEdit) {
     byId("txn-delete-btn").addEventListener("click", () => {
       confirmAction("Delete this transaction?", () => {
-        mutateData((d) => {
-          // A deleted debt payment gives its amount back to the debt's balance.
-          adjustDebtForTransactionChange(d, d.transactions.find((t) => t.id === txn.id), null);
-          d.transactions = d.transactions.filter((t) => t.id !== txn.id);
-          d.tombstones.push(`transaction:${txn.id}`);
-        });
+        mutateData((d) => { removeTransaction(d, txn.id); }); // also gives a debt payment back to its balance
         closeModal();
         showToast("Transaction deleted");
       });
@@ -1033,6 +1089,11 @@ function openBillModal(existing) {
         <label for="bill-category">Category</label>
         <select id="bill-category">${categoryOptions("expense", bill.categoryId || "bills")}</select>
       </div>
+      ${state.data.debts.length ? `<div class="form-group">
+        <label for="bill-debt">Counts toward a debt (optional)</label>
+        <select id="bill-debt"><option value="">None</option>${state.data.debts.map((d) => `<option value="${d.id}" ${d.id === bill.debtId ? "selected" : ""}>${escapeHtml(d.name)}</option>`).join("")}</select>
+        <p class="help-text">Marking this bill paid will also lower that debt's balance by the same amount.</p>
+      </div>` : ""}
       <div class="form-row">
         <div class="form-group">
           <label for="bill-amount">Usual Amount</label>
@@ -1058,6 +1119,7 @@ function openBillModal(existing) {
       id: isEdit ? bill.id : uid(),
       name: byId("bill-name").value.trim(),
       categoryId: byId("bill-category").value,
+      debtId: byId("bill-debt") && byId("bill-debt").value ? byId("bill-debt").value : null,
       amount: Math.abs(Number(byId("bill-amount").value) || 0),
       dueDay: dueDayVal ? Math.min(31, Math.max(1, Math.round(Number(dueDayVal)))) : null,
     };
@@ -1087,18 +1149,23 @@ function openBillModal(existing) {
   }
 }
 
-function openMarkBillPaidModal(bill) {
+function openMarkBillPaidModal(bill, dueISO) {
+  // Payments count toward the month a bill falls due, so if that month isn't
+  // this one (paying early across a month end), default to the due date.
+  const defaultDate = dueISO && monthKeyOf(dueISO) !== monthKeyOf(todayISO()) ? dueISO : todayISO();
+  const linkedDebt = bill.debtId ? state.data.debts.find((d) => d.id === bill.debtId) : null;
   openModal(`
     <h2>Mark Paid: ${escapeHtml(bill.name)}</h2>
     <form id="bill-pay-form">
       <div class="form-group">
         <label for="bill-pay-date">Date</label>
-        <input type="date" id="bill-pay-date" value="${todayISO()}" required>
+        <input type="date" id="bill-pay-date" value="${defaultDate}" required>
       </div>
       <div class="form-group">
         <label for="bill-pay-amount">Amount</label>
         <input type="number" id="bill-pay-amount" min="0.01" step="0.01" value="${bill.amount || ""}" required>
       </div>
+      ${linkedDebt ? `<p class="help-text">This also lowers the <strong>${escapeHtml(linkedDebt.name)}</strong> balance by the same amount.</p>` : ""}
       <div class="modal-actions">
         <button type="button" class="btn" data-action="modal-cancel">Cancel</button>
         <button type="submit" class="btn btn-primary">Mark Paid</button>
@@ -1111,18 +1178,7 @@ function openMarkBillPaidModal(bill) {
     const amount = Math.abs(Number(byId("bill-pay-amount").value) || 0);
     const date = byId("bill-pay-date").value;
     if (amount <= 0) return;
-    mutateData((d) => {
-      const cat = d.categories.find((c) => c.id === bill.categoryId) || d.categories.find((c) => c.id === "bills") || d.categories.find((c) => c.type === "expense");
-      d.transactions.push({
-        id: uid(),
-        type: "expense",
-        date,
-        categoryId: cat ? cat.id : "bills",
-        description: `Bill: ${bill.name}`,
-        amount,
-        billId: bill.id,
-      });
-    });
+    mutateData((d) => { recordBillPayment(d, bill, date, amount, uid()); });
     closeModal();
     showToast("Bill marked as paid");
   });
@@ -1187,7 +1243,7 @@ async function handleSaveGithubConfig() {
     showToast("Enter an access token.");
     return;
   }
-  const config = { owner, repo, token };
+  const config = { owner, repo, token, tokenExpires: byId("set-gh-expires").value || null };
   setSyncStatus("syncing", "Connecting…");
   try {
     const { data, sha } = await syncPull(config);
@@ -1203,6 +1259,7 @@ async function handleSaveGithubConfig() {
     }
     setSyncStatus("ok", "Connected & synced");
     render();
+    checkRepoVisibility(true);
   } catch (e) {
     console.error(e);
     setSyncStatus("error", describeSyncError(e));
@@ -1234,6 +1291,7 @@ function handleDisconnectGithub() {
   confirmAction("Disconnect this device from GitHub? Your data stays on this device but will stop syncing.", () => {
     clearGithubConfig();
     state.githubConfig = null;
+    state.repoPublic = null;
     setSyncStatus("", "Saved on this device only");
     closeModal();
     render();
@@ -1295,6 +1353,7 @@ function handleLockNow() {
 /* ---------- Init ---------- */
 
 async function init() {
+  applyTextSize();
   state.data = loadLocalData();
   state.githubConfig = loadGithubConfig();
   wireLockScreen();
@@ -1313,6 +1372,7 @@ async function init() {
       state.sha = sha;
       setSyncStatus("ok", "Synced");
       if (isDirty()) scheduleSync(); // unsent changes from last time
+      checkRepoVisibility(false);
     } catch (e) {
       console.error(e);
       setSyncStatus("error", describeSyncError(e));

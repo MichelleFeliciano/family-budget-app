@@ -308,6 +308,7 @@ test("accessibility: text colors meet WCAG AA (4.5:1) in light and dark mode", (
     ["button text on primary button", v["--color-on-primary"] || white, v["--color-primary"]],
     ["dark-green text on its tint", v["--color-primary-dark"], v["--color-primary-tint"]],
     ["danger on danger tint", v["--color-danger"], v["--color-danger-tint"]],
+    ["token reminder banner (warning on its tint)", v["--color-warning"], v["--color-warning-tint"]],
   ];
   const fails = [];
   for (const [mode, v] of [["light", light], ["dark", dark]])
@@ -409,4 +410,103 @@ test("bill categories: changing a bill's category also moves its logged payments
   assert.equal(recategorizeBill(data, "b1", "no-such-category"), null);
   assert.equal(recategorizeBill(data, "no-such-bill", "food"), null);
   assert.equal(data.bills[0].categoryId, "personal", "rejected changes leave the bill alone");
+});
+
+/* ------------------------------------------------------------------ */
+test("pay period: paid bills are marked and left out of what's still to pay", () => {
+  const bills = [{ id: "a", name: "Water", amount: 100, dueDay: 15 }, { id: "b", name: "Gas", amount: 50.5, dueDay: 18 }, { id: "c", name: "Rent", amount: 1000, dueDay: 1 }];
+  const txns = [
+    { id: "t1", billId: "a", date: "2026-04-14" },   // Water paid this month
+    { id: "t2", billId: "c", date: "2026-03-30" },   // Rent paid, but in March
+  ];
+  const r = getBillsDueInPeriod(bills, P("weekly", "2026-04-01"), at("2026-04-15"), txns); // period Apr 15 - Apr 22
+  assert.deepEqual(r.due.map((x) => [x.bill.name, !!x.paid]), [["Water", true], ["Gas", false]]);
+  assert.equal(r.total, 150.5);
+  assert.equal(r.remaining, 50.5);
+  // A period that crosses into next month looks for the payment in the month the bill falls due.
+  const r2 = getBillsDueInPeriod(bills, P("weekly", "2026-03-30"), at("2026-03-30"), txns); // Mar 30 - Apr 6
+  assert.deepEqual(r2.due.map((x) => [x.bill.name, !!x.paid]), [["Rent", false]], "March payment doesn't count for April's due date");
+  assert.equal(getBillsDueInPeriod(bills, P("weekly", "2026-04-01"), at("2026-04-15")).remaining, 150.5, "transactions are optional");
+});
+
+test("bills list: sorted by due day, name, or category", () => {
+  const cats = [{ id: "bills", name: "Bills & Utilities" }, { id: "personal", name: "Personal & Fun" }, { id: "debt", name: "Debt Payments" }];
+  const bills = [
+    { id: "1", name: "Netflix", dueDay: 12, categoryId: "personal" }, { id: "2", name: "Water", dueDay: 3, categoryId: "bills" },
+    { id: "3", name: "Amazon", categoryId: "personal" }, { id: "4", name: "Chase", dueDay: 12, categoryId: "debt" }, { id: "5", name: "gas" },
+  ];
+  const ids = (mode) => sortBills(bills, mode, cats).map((b) => b.id).join("");
+  assert.equal(ids("due"), "24135", "by due day; same day by name; no due day last (by name)");
+  assert.equal(ids("name"), "34512", "Amazon, Chase, gas, Netflix, Water");
+  assert.equal(ids("category"), "25413", "Bills & Utilities (Water, gas), Debt Payments (Chase), Personal & Fun (Netflix, Amazon)");
+  assert.notEqual(sortBills(bills, "due", cats), bills, "never reorders the saved list itself");
+  assert.deepEqual(bills.map((b) => b.id), ["1", "2", "3", "4", "5"]);
+});
+
+test("bills linked to a debt: paying the bill lowers the debt, undoing restores it", () => {
+  const data = mk({
+    debts: [{ id: "d1", name: "Visa", currentBalance: 1000 }],
+    bills: [{ id: "b1", name: "Visa payment", categoryId: "debt", debtId: "d1" }, { id: "b2", name: "Water", categoryId: "bills" }, { id: "b3", name: "Old link", debtId: "gone" }],
+  });
+  const paid = recordBillPayment(data, data.bills[0], "2026-10-05", 150, "p1");
+  assert.equal(data.debts[0].currentBalance, 850);
+  assert.equal(paid.debtId, "d1");
+  assert.equal(paid.debtApplied, 150);
+  assert.equal(paid.categoryId, "debt");
+  assert.equal(paid.billId, "b1");
+  recordBillPayment(data, data.bills[1], "2026-10-05", 40, "p2");
+  assert.equal(data.debts[0].currentBalance, 850, "an unlinked bill doesn't touch the debt");
+  assert.equal(data.transactions.find((t) => t.id === "p2").debtId, undefined);
+  recordBillPayment(data, data.bills[2], "2026-10-05", 10, "p3");
+  assert.equal(data.transactions.find((t) => t.id === "p3").debtId, undefined, "a link to a deleted debt is ignored");
+  assert.equal(removeTransaction(data, "p1"), true);
+  assert.equal(data.debts[0].currentBalance, 1000, "undo gives the money back");
+  assert.ok(data.tombstones.includes("transaction:p1"));
+  assert.equal(removeTransaction(data, "nope"), false);
+});
+
+test("token reminder: warns two weeks ahead, today, and after it has expired", () => {
+  const today = at("2026-10-07");
+  assert.equal(tokenExpiryNotice("", today), null);
+  assert.equal(tokenExpiryNotice("garbage", today), null);
+  assert.equal(tokenExpiryNotice("2026-12-30", today), null, "far away: stay quiet");
+  assert.equal(tokenExpiryNotice("2026-10-21", today).daysLeft, 14);
+  assert.equal(tokenExpiryNotice("2026-10-22", today), null, "15 days: still quiet");
+  const soon = tokenExpiryNotice("2026-10-14", today);
+  assert.equal(soon.level, "soon");
+  assert.match(soon.message, /expires in 7 days \(Oct 14\)/);
+  assert.match(tokenExpiryNotice("2026-10-08", today).message, /in 1 day /);
+  assert.match(tokenExpiryNotice("2026-10-07", today).message, /expires today/);
+  const gone = tokenExpiryNotice("2026-10-01", today);
+  assert.equal(gone.level, "expired");
+  assert.match(gone.message, /expired on Oct 1/);
+});
+
+test("text size: remembered per device, only valid sizes accepted", () => {
+  store.clear();
+  assert.equal(getTextSize(), "normal");
+  setTextSize("large"); assert.equal(getTextSize(), "large");
+  setTextSize("xlarge"); assert.equal(getTextSize(), "xlarge");
+  setTextSize("gigantic"); assert.equal(getTextSize(), "normal", "invalid value resets to normal");
+  store.set("familyBudget.textSize", "<script>");
+  assert.equal(getTextSize(), "normal");
+});
+
+test("text size: the stylesheet scales everything from the root size", () => {
+  const css = read("css/styles.css");
+  assert.match(css, /html\[data-text-size="large"\]\s*\{[^}]*font-size:\s*\d+px/);
+  assert.match(css, /html\[data-text-size="xlarge"\]\s*\{[^}]*font-size:\s*\d+px/);
+  assert.doesNotMatch(css, /html,\s*body\s*\{[^}]*font-size:\s*\d+px/, "body must not pin a fixed pixel size");
+});
+
+test("safety check: warns only when the data repository is public", async () => {
+  const reply = (obj, ok = true) => async () => ({ ok, status: ok ? 200 : 404, json: async () => obj });
+  globalThis.fetch = reply({ private: false }); assert.equal(await githubRepoIsPublic(cfg), true);
+  globalThis.fetch = reply({ private: true }); assert.equal(await githubRepoIsPublic(cfg), false);
+  globalThis.fetch = reply({}, false); assert.equal(await githubRepoIsPublic(cfg), null, "unknown: don't scare anyone");
+  globalThis.fetch = async () => { throw new TypeError("Failed to fetch"); }; assert.equal(await githubRepoIsPublic(cfg), null);
+});
+
+test("bills: paid rows are not dimmed (dimmed gray text is too faint to read)", () => {
+  assert.doesNotMatch(read("css/styles.css"), /is-paid[^{]*\{[^}]*opacity/);
 });

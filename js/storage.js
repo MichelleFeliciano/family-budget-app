@@ -150,6 +150,33 @@ function setUnlockedOnThisDevice(passphraseHash) {
   else localStorage.removeItem(LOCAL_UNLOCK_KEY);
 }
 
+// How big text is on THIS device (a display preference, so it isn't synced).
+const LOCAL_TEXT_SIZE_KEY = "familyBudget.textSize";
+const TEXT_SIZES = ["normal", "large", "xlarge"];
+
+function getTextSize() {
+  const saved = localStorage.getItem(LOCAL_TEXT_SIZE_KEY);
+  return TEXT_SIZES.includes(saved) ? saved : "normal";
+}
+
+function setTextSize(size) {
+  if (TEXT_SIZES.includes(size) && size !== "normal") localStorage.setItem(LOCAL_TEXT_SIZE_KEY, size);
+  else localStorage.removeItem(LOCAL_TEXT_SIZE_KEY);
+}
+
+// How the bills list is ordered on this device.
+const LOCAL_BILL_SORT_KEY = "familyBudget.billSort";
+const BILL_SORTS = ["due", "name", "category"];
+
+function getBillSort() {
+  const saved = localStorage.getItem(LOCAL_BILL_SORT_KEY);
+  return BILL_SORTS.includes(saved) ? saved : "due";
+}
+
+function setBillSort(mode) {
+  if (BILL_SORTS.includes(mode)) localStorage.setItem(LOCAL_BILL_SORT_KEY, mode);
+}
+
 // "Has changes GitHub hasn't confirmed yet" — survives closing the tab, so a
 // push that never ran (or failed) is retried the next time the app opens.
 const LOCAL_DIRTY_KEY = "familyBudget.unsynced";
@@ -230,6 +257,24 @@ async function githubFetchFile(config) {
   const json = await res.json();
   const data = JSON.parse(base64ToUtf8(json.content));
   return { data, sha: json.sha };
+}
+
+/**
+ * Is the repository the budget is saved in public? Returns true / false, or
+ * null if GitHub couldn't say (never blocks anything — it only powers a warning).
+ */
+async function githubRepoIsPublic(config) {
+  try {
+    const res = await fetch(`https://api.github.com/repos/${config.owner}/${config.repo}`, {
+      cache: "no-store",
+      headers: { Authorization: `Bearer ${config.token}`, Accept: "application/vnd.github+json" },
+    });
+    if (!res.ok) return null;
+    const info = await res.json();
+    return typeof info.private === "boolean" ? !info.private : null;
+  } catch (e) {
+    return null;
+  }
 }
 
 async function githubWriteFile(config, data, sha) {
