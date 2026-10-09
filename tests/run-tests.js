@@ -978,3 +978,62 @@ test("app wiring: carry-forward, last paid, not-marked-paid, cash flow and goals
     "recordGoalContribution(d, goal",
   ]) assert.ok(app.includes(needle), `app.js is missing ${needle}`);
 });
+
+/* ------------------------------------------------------------------ */
+const cssRules = (css) => [...css.replace(/\/\*[\s\S]*?\*\//g, "").matchAll(/([^{}@]+)\{([^{}]*)\}/g)].map((m) => ({ selector: m[1].trim(), body: m[2] }));
+
+test("css: every form field sets its own background and text color (dark mode showed white boxes with near-white text)", () => {
+  const css = read("css/styles.css");
+  const fields = cssRules(css).filter((r) => /(^|[\s,>])(input|select|textarea)\b|-input\b|-select\b/.test(r.selector) && !/::placeholder|:focus|:checked/.test(r.selector));
+  const boxes = fields.filter((r) => /border|padding|min-height/.test(r.body));
+  assert.ok(boxes.length >= 6, `expected to find the form-field rules, found ${boxes.length}`);
+  const bare = boxes.filter((r) => !/background/.test(r.body) || !/(^|[\s;])color:/.test(r.body));
+  assert.deepEqual(bare.map((r) => r.selector), [], "these field rules draw a box but don't set both a background and a text color");
+});
+
+test("css: native widgets and hints follow light/dark, and keyboard focus is visible", () => {
+  const css = read("css/styles.css");
+  assert.match(css, /:root\s*\{\s*color-scheme:\s*light dark;\s*\}/);
+  assert.match(css, /::placeholder\s*\{\s*color:\s*var\(--color-text-muted\);\s*opacity:\s*1;\s*\}/);
+  assert.match(css, /:focus-visible\s*\{\s*outline:\s*3px solid/);
+  assert.match(css, /\.btn:disabled\s*\{[^}]*opacity/, "disabled buttons look disabled");
+});
+
+test("css: colour swatches in the category form are big enough to tap, selected one is ringed", () => {
+  const css = read("css/styles.css");
+  assert.match(css, /\.swatch-picker \.color-swatch\s*\{[^}]*width:\s*44px;[^}]*height:\s*44px/);
+  assert.match(css, /\.swatch-picker \.color-swatch\.selected\s*\{[^}]*border-color:\s*var\(--color-text\)/);
+  const app = read("js/app.js");
+  assert.match(app, /class="swatch-picker"/);
+  assert.doesNotMatch(app, /style\.borderColor/, "selection is a class now, not an inline style");
+});
+
+test("css: phone rules come after the base rules they override", () => {
+  const css = read("css/styles.css");
+  const mobile = css.lastIndexOf("@media (max-width: 520px)");
+  for (const base of [".bar-row .bar-label {", ".budget-row {", ".bill-item {", ".print-sheet {", ".app-header {", ".search-box {"])
+    assert.ok(css.indexOf(base) !== -1 && css.indexOf(base) < mobile, `${base} must be defined before the small-screen block`);
+  assert.match(css.slice(mobile), /\.budget-row \.cat-pill \{ grid-column: 1 \/ -1; \}/, "category names get their own line on phones");
+  assert.match(css.slice(mobile), /\.bar-row \.bar-track \{ flex: 0 0 100%; order: 3; \}/);
+});
+
+test("css: narrow screens — two summary cards fit across 360px phones, header wraps instead of crushing the title", () => {
+  const css = read("css/styles.css");
+  const min = Number(css.match(/\.summary-grid\s*\{[^}]*minmax\((\d+)px/)[1]);
+  assert.ok(2 * min + 12 <= 360 - 32, `two cards of ${min}px must fit in a 360px phone`);
+  assert.match(css, /\.app-header\s*\{[^}]*flex-wrap:\s*wrap/);
+  assert.doesNotMatch(css, /\.sync-status\s*\{[^}]*max-width:\s*50%/);
+});
+
+test("css: budget grid has Planned / Spent headings and the bills list has its own phone layout", () => {
+  const app = read("js/app.js");
+  assert.match(app, /class="budget-head"[^>]*><span>Category<\/span><span>Planned<\/span><span>Spent<\/span>/);
+  assert.match(app, /class="bill-item bill-item-list/);
+  assert.match(read("css/styles.css"), /\.bill-item-list \.bill-main \{ flex: 1 1 100%; \}/);
+});
+
+test("css: print preview wraps long bill names without breaking the 'Paid' heading", () => {
+  const css = read("css/styles.css");
+  assert.match(css, /\.print-sheet th:nth-child\(2\), \.print-sheet td:nth-child\(2\)\s*\{[^}]*overflow-wrap:\s*anywhere/);
+  assert.match(css, /\.print-sheet th, \.print-sheet td:first-child, \.print-sheet td\.num, \.print-sheet td\.paid-box\s*\{\s*white-space:\s*nowrap/);
+});

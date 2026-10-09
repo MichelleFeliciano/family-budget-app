@@ -616,7 +616,7 @@ function renderBudget() {
       <h2>Monthly Budget</h2>
       <p class="help-text">Type how much you plan to spend in each category. We'll fill in what you've actually spent.</p>
       ${planFrom ? `<p class="help-text carry-note">Showing ${escapeHtml(formatMonthLabel(planFrom))}'s plan. Change any amount to make this month's own.</p>` : ""}
-      ${cats.length ? rows : '<p class="empty-state">No expense categories yet. Add one in Settings.</p>'}
+      ${cats.length ? `<div class="budget-head" aria-hidden="true"><span>Category</span><span>Planned</span><span>Spent</span></div>${rows}` : '<p class="empty-state">No expense categories yet. Add one in Settings.</p>'}
       <div class="budget-total-row">
         <span>Total Spent</span>
         <span>${formatMoney(totalActual)}</span>
@@ -716,7 +716,7 @@ function renderPayPeriodSection() {
       ${result.due.length ? `<div class="budget-total-row"><span>${allPaid ? "All paid ✓" : "Still to pay"}</span><span>${formatMoney(result.remaining)}</span></div>
       <p class="help-text">Total due this pay period: ${formatMoney(result.total)}</p>` : ""}
       ${renderCashFlow()}
-      ${result.noDueDay.length ? `<p class="help-text" style="margin-top:12px;">${result.noDueDay.length} bill${result.noDueDay.length === 1 ? "" : "s"} skipped here because they have no due date set: ${result.noDueDay.map((b) => escapeHtml(b.name)).join(", ")}</p>` : ""}
+      ${result.noDueDay.length ? `<p class="help-text" style="margin-top:12px;">${result.noDueDay.length === 1 ? "1 bill is" : `${result.noDueDay.length} bills are`} skipped here because ${result.noDueDay.length === 1 ? "it has" : "they have"} no due date set: ${result.noDueDay.map((b) => escapeHtml(b.name)).join(", ")}</p>` : ""}
       <button class="btn btn-link" data-action="open-pay-schedule">Change payday settings</button>
     </div>`;
 }
@@ -729,7 +729,7 @@ function renderBillsSection() {
     // A bill with no category (or a deleted one) counts as Bills & Utilities, so show that in the dropdown too.
     const cat = getCategory(b.categoryId) || getCategory("bills") || state.data.categories.find((c) => c.type === "expense");
     return `
-      <div class="bill-item${paidTxn ? " is-paid" : ""}">
+      <div class="bill-item bill-item-list${paidTxn ? " is-paid" : ""}">
         <div class="bill-main">
           <div class="bill-name">${escapeHtml(b.name)}</div>
           <div class="bill-meta">${formatMoney(b.amount)}${b.dueDay ? ` • Due on the ${ordinal(b.dueDay)}` : ""}</div>
@@ -1088,8 +1088,8 @@ function openCategoryModal(existing) {
       </div>
       <div class="form-group">
         <label>Color</label>
-        <div style="display:flex; gap:8px; flex-wrap:wrap;">
-          ${colorOptions.map((c) => `<button type="button" class="color-swatch" data-color="${c}" style="background:${c}; border:2px solid ${c === cat.color ? "var(--color-text)" : "transparent"};"></button>`).join("")}
+        <div class="swatch-picker">
+          ${colorOptions.map((c) => `<button type="button" class="color-swatch${c === cat.color ? " selected" : ""}" data-color="${c}" style="background:${c};" aria-label="Choose this color" aria-pressed="${c === cat.color}"></button>`).join("")}
         </div>
         <input type="hidden" id="cat-color" value="${cat.color}">
       </div>
@@ -1101,11 +1101,13 @@ function openCategoryModal(existing) {
     </form>
   `);
 
-  document.querySelectorAll(".color-swatch").forEach((btn) => {
+  document.querySelectorAll(".swatch-picker .color-swatch").forEach((btn) => {
     btn.addEventListener("click", () => {
       byId("cat-color").value = btn.dataset.color;
-      document.querySelectorAll(".color-swatch").forEach((b) => (b.style.borderColor = "transparent"));
-      btn.style.borderColor = "var(--color-text)";
+      document.querySelectorAll(".swatch-picker .color-swatch").forEach((b) => {
+        b.classList.toggle("selected", b === btn);
+        b.setAttribute("aria-pressed", String(b === btn));
+      });
     });
   });
 
