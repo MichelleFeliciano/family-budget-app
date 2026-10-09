@@ -92,7 +92,8 @@ function estimateMonthsToPayoff(balance, annualRatePct, monthlyPayment) {
 
   const r = annualRate / 100 / 12;
   if (r === 0) {
-    return { months: Math.ceil(P / M), error: null };
+    // Whole cents, so 277.56 owed at 10.28 a month is exactly 27 payments (277.56 / 10.28 isn't exact in floating point).
+    return { months: Math.ceil(Math.round(P * 100) / Math.round(M * 100) - 1e-9), error: null };
   }
 
   const monthlyInterest = r * P;
@@ -117,7 +118,7 @@ function orderDebtsAvalanche(debts) {
 
 function orderDebts(debts, strategy) {
   const active = debts.filter((d) => Number(d.currentBalance) > 0);
-  const paidOff = debts.filter((d) => Number(d.currentBalance) <= 0);
+  const paidOff = debts.filter((d) => !(Number(d.currentBalance) > 0));
   const ordered = strategy === "avalanche" ? orderDebtsAvalanche(active) : orderDebtsSnowball(active);
   return [...ordered, ...paidOff];
 }
@@ -277,7 +278,7 @@ function sortBills(bills, mode, categories = []) {
   const day = (b) => (b.dueDay ? Number(b.dueDay) : 99);
   const catName = (b) => {
     const c = categories.find((x) => x.id === b.categoryId) || categories.find((x) => x.id === "bills");
-    return c ? c.name.toLowerCase() : "";
+    return c ? String(c.name || "").toLowerCase() : "";
   };
   const byName = (a, b) => name(a).localeCompare(name(b));
   const compare = {
@@ -806,4 +807,33 @@ function transactionsToCsv(data, year) {
     ].join(","));
   });
   return "\ufeff" + lines.join("\r\n") + "\r\n";
+}
+
+/* ---------- Debt balances ----------
+   A debt's balance used to be a single number that every payment changed, so two
+   phones that each logged a payment before syncing kept both payments but only one
+   of the deductions. Now the balance is worked out from the payments themselves:
+       balance = starting balance - payments applied + balanceAdjust
+   where balanceAdjust is whatever difference the person typed when they set the
+   balance by hand. Every device that has the same payments gets the same balance. */
+
+/** What the payments logged against a debt have taken off it. */
+function debtAppliedTotal(data, debtId) {
+  return roundCents((data.transactions || [])
+    .filter((t) => t.debtId === debtId)
+    .reduce((sum, t) => sum + (Number(t.debtApplied !== undefined ? t.debtApplied : t.amount) || 0), 0));
+}
+
+/** Brings every debt's balance in line with its payments. Safe to run any number of times. */
+function reconcileDebts(data) {
+  (data.debts || []).forEach((debt) => {
+    const applied = debtAppliedTotal(data, debt.id);
+    const original = Number(debt.originalBalance) || 0;
+    if (typeof debt.balanceAdjust !== "number" || !Number.isFinite(debt.balanceAdjust)) {
+      // First time (or the balance was just typed by hand): remember how far it is from the plain sum.
+      debt.balanceAdjust = roundCents((Number(debt.currentBalance) || 0) - (original - applied));
+    }
+    debt.currentBalance = Math.max(0, roundCents(original - applied + debt.balanceAdjust));
+  });
+  return data;
 }

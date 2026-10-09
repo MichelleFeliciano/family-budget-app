@@ -98,8 +98,10 @@ paid by mistake has its own **Undo** button next to it.
    **Download raw file** button to save it.
 3. On a device: **Settings → Restore from Backup** → pick the file you saved → confirm.
 
-Restoring **replaces** everything with that version (the passphrase is kept), so
-anything added after that date has to be re-entered. To be safe, first use
+Restoring **replaces** everything with that version (the current passphrase is kept), so
+anything added after that date has to be re-entered. Things the old version has that
+you'd deleted since come back on every device the next time it syncs, and regular
+paychecks fill themselves back in. To be safe, first use
 **Settings → Download Backup** to save today's version as well.
 
 ## 5. Two devices show different numbers

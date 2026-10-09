@@ -42,15 +42,52 @@ function defaultData() {
     budgetPlan: {},
     paySchedule: null,
     tombstones: [],
+    restoreEpoch: null, // when a backup was last restored; see mergeData
     lastUpdated: EPOCH,
   };
 }
 
 // A category colour ends up in a style attribute, so only a hex colour or one of the
-// app's own colour variables is allowed through.
+// app's own colour variables is allowed through. A category is either income or expense.
 function safeCategory(category) {
   const ok = typeof category.color === "string" && /^(#[0-9a-fA-F]{3,8}|var\(--[\w-]+\))$/.test(category.color);
-  return ok ? category : { ...category, color: "var(--cat-other)" };
+  const out = ok ? { ...category } : { ...category, color: "var(--cat-other)" };
+  if (out.type !== "income" && out.type !== "expense") out.type = "expense";
+  return out;
+}
+
+// Turns "1,200", "$300" or 12 into a number; anything unreadable becomes 0 so one bad
+// entry can't turn a whole total into nothing.
+function toNumber(value) {
+  if (typeof value === "number") return Number.isFinite(value) ? value : 0;
+  if (typeof value === "string") {
+    const text = value.replace(/[$,\s]/g, "");
+    const n = Number(text);
+    return text !== "" && Number.isFinite(n) ? n : 0;
+  }
+  return 0;
+}
+
+const NUMERIC_FIELDS = {
+  transactions: ["amount", "debtApplied"],
+  bills: ["amount", "dueDay", "dueMonth"],
+  debts: ["originalBalance", "currentBalance", "interestRate", "minPayment"],
+  goals: ["target", "startAmount"],
+  recurringIncome: ["amount"],
+};
+
+// Copies of the records with their number fields turned into real numbers (a field
+// that isn't there, or is null, is left as it is).
+function cleanRecords(list, kind) {
+  return list.map((record) => {
+    const out = { ...record };
+    NUMERIC_FIELDS[kind].forEach((key) => {
+      if (out[key] !== undefined && out[key] !== null) out[key] = toNumber(out[key]);
+    });
+    if (kind === "transactions" && out.date !== undefined && typeof out.date !== "string") out.date = out.date === null ? "" : String(out.date);
+    if (kind === "debts" && out.balanceAdjust !== undefined && !(typeof out.balanceAdjust === "number" && Number.isFinite(out.balanceAdjust))) delete out.balanceAdjust;
+    return out;
+  });
 }
 
 /**
@@ -63,21 +100,23 @@ function sanitizeData(raw) {
   const src = raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
   const records = (v) => (Array.isArray(v) ? v.filter((x) => x && typeof x === "object" && !Array.isArray(x)) : []);
   const validDate = typeof src.lastUpdated === "string" && !isNaN(new Date(src.lastUpdated));
-  return {
+  const out = {
     ...src,
     version: typeof src.version === "number" ? src.version : base.version,
     passphraseHash: typeof src.passphraseHash === "string" && src.passphraseHash ? src.passphraseHash : null,
     categories: Array.isArray(src.categories) ? records(src.categories).map(safeCategory) : base.categories,
-    transactions: records(src.transactions),
-    debts: records(src.debts),
-    bills: records(src.bills),
-    recurringIncome: records(src.recurringIncome),
-    goals: records(src.goals),
+    transactions: cleanRecords(records(src.transactions), "transactions"),
+    debts: cleanRecords(records(src.debts), "debts"),
+    bills: cleanRecords(records(src.bills), "bills"),
+    recurringIncome: cleanRecords(records(src.recurringIncome), "recurringIncome"),
+    goals: cleanRecords(records(src.goals), "goals"),
     budgetPlan: src.budgetPlan && typeof src.budgetPlan === "object" && !Array.isArray(src.budgetPlan) ? src.budgetPlan : {},
     paySchedule: src.paySchedule && typeof src.paySchedule === "object" && typeof src.paySchedule.frequency === "string" ? src.paySchedule : null,
     tombstones: Array.isArray(src.tombstones) ? src.tombstones.filter((t) => typeof t === "string") : [],
+    restoreEpoch: typeof src.restoreEpoch === "string" && !isNaN(new Date(src.restoreEpoch)) ? src.restoreEpoch : null,
     lastUpdated: validDate ? src.lastUpdated : EPOCH,
   };
+  return reconcileDebts(out);
 }
 
 /** Parses a backup file; throws a readable error if it isn't a budget backup. */
@@ -107,9 +146,19 @@ function restoreFromBackup(current, backup) {
   const present = keys(backup);
   // Anything not in the backup is marked deleted, so "replace" really replaces
   // even after the merge with GitHub; anything in the backup is un-deleted.
-  const removed = [...keys(current)].filter((k) => !present.has(k));
+  // Paychecks the app added on its own are the exception: they come back by themselves
+  // (they're worked out from the paycheck settings), so they're not marked deleted.
+  const removed = [...keys(current)].filter((k) => !present.has(k) && !k.startsWith("transaction:pay-"));
   const tombstones = Array.from(new Set([...(current.tombstones || []), ...backup.tombstones, ...removed])).filter((t) => !present.has(t));
-  return { ...backup, passphraseHash: backup.passphraseHash || current.passphraseHash || null, tombstones };
+  return {
+    ...backup,
+    // The family's current passphrase stays; an old backup must never put an old one back.
+    passphraseHash: current.passphraseHash || backup.passphraseHash || null,
+    tombstones,
+    // Other devices still hold delete-markers for things this restore brings back;
+    // the epoch tells them to take this device's markers instead of adding theirs.
+    restoreEpoch: new Date().toISOString(),
+  };
 }
 
 function loadLocalData() {
@@ -364,13 +413,20 @@ function mergeData(localRaw, remoteRaw) {
   const winner = remoteNewer ? remote : local;
   const loser = remoteNewer ? local : remote;
 
-  const tombstones = Array.from(new Set([...loser.tombstones, ...winner.tombstones]));
+  // After a restore, the side that restored is the baseline: its delete-markers replace the
+  // other side's (which may still hold markers for things the restore brought back), and its
+  // budget plan replaces theirs. Otherwise everything is unioned.
+  const epochLocal = local.restoreEpoch || "";
+  const epochRemote = remote.restoreEpoch || "";
+  const restored = epochLocal === epochRemote ? null : epochLocal > epochRemote ? local : remote;
+  const tombstones = restored ? Array.from(new Set(restored.tombstones)) : Array.from(new Set([...loser.tombstones, ...winner.tombstones]));
   const deleted = new Set(tombstones);
   const isDeleted = (type, id) => deleted.has(`${type}:${id}`);
 
-  return {
+  const merged = {
     ...loser,
     ...winner,
+    restoreEpoch: restored ? restored.restoreEpoch : winner.restoreEpoch || loser.restoreEpoch || null,
     paySchedule: winner.paySchedule || loser.paySchedule || null,
     passphraseHash: winner.passphraseHash || loser.passphraseHash || null,
     categories: mergeArraysById(loser.categories, winner.categories).filter((c) => !isDeleted("category", c.id)),
@@ -379,10 +435,11 @@ function mergeData(localRaw, remoteRaw) {
     bills: mergeArraysById(loser.bills, winner.bills).filter((b) => !isDeleted("bill", b.id)),
     recurringIncome: mergeArraysById(loser.recurringIncome, winner.recurringIncome).filter((p) => !isDeleted("paycheck", p.id)),
     goals: mergeArraysById(loser.goals, winner.goals).filter((g) => !isDeleted("goal", g.id)),
-    budgetPlan: mergeBudgetPlan(loser.budgetPlan, winner.budgetPlan),
+    budgetPlan: restored ? { ...restored.budgetPlan } : mergeBudgetPlan(loser.budgetPlan, winner.budgetPlan),
     tombstones,
     lastUpdated: winner.lastUpdated,
   };
+  return reconcileDebts(merged);
 }
 
 /**

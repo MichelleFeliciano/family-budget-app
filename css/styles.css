@@ -9,6 +9,7 @@
   --color-surface: #ffffff;
   --color-surface-alt: #f2efe9;
   --color-border: #e3ded3;
+  --color-field-border: #8a8274;
   --color-text: #2b2926;
   --color-text-muted: #6e675c;
   --color-primary: #3f6b58;
@@ -43,6 +44,7 @@
     --color-surface: #2c2a26;
     --color-surface-alt: #33312c;
     --color-border: #47433c;
+    --color-field-border: #8f887b;
     --color-text: #f3f0ea;
     --color-text-muted: #b8b1a4;
     --color-primary: #6fa78e;
@@ -113,7 +115,7 @@ input, select, textarea {
   min-height: var(--touch-min);
   padding: 10px 20px;
   border-radius: var(--radius-sm);
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--color-field-border);
   background: var(--color-surface);
   color: var(--color-text);
   font-size: 1rem;
@@ -141,13 +143,15 @@ a.btn { text-decoration: none; }
   min-width: var(--touch-min);
   padding: 10px;
 }
+.help-text .btn-link { min-height: 0; padding: 2px 4px; display: inline; } /* a link inside a sentence stays in the line */
+.lock-card summary { padding: 12px 0; min-height: 44px; cursor: pointer; }
 .btn-link {
   background: none;
   border: none;
   color: var(--color-primary);
   text-decoration: underline;
-  min-height: auto;
-  padding: 4px;
+  min-height: 44px;
+  padding: 8px 6px;
 }
 
 /* ---------- Lock screen ---------- */
@@ -181,7 +185,7 @@ a.btn { text-decoration: none; }
   font-size: 1.2rem;
   text-align: center;
   padding: 10px;
-  border: 2px solid var(--color-border);
+  border: 2px solid var(--color-field-border);
   border-radius: var(--radius-sm);
   margin-bottom: 16px;
   background: var(--color-surface);
@@ -234,6 +238,7 @@ a.btn { text-decoration: none; }
   white-space: nowrap;
 }
 .tab { display: flex; align-items: center; justify-content: center; gap: 6px; }
+.tab:focus-visible { outline-offset: -4px; }
 .tab.active {
   color: var(--color-primary);
   border-bottom-color: var(--color-primary);
@@ -262,7 +267,7 @@ main#view-container {
 /* ---------- Dashboard ---------- */
 .summary-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(max(140px, 8.7rem), 1fr)); /* grows with the text size, so bigger text means one wide card per row */
   gap: 12px;
   margin-bottom: 20px;
 }
@@ -274,7 +279,11 @@ main#view-container {
   text-align: center;
 }
 .summary-card .label { color: var(--color-text-muted); font-size: 0.9rem; }
-.summary-card .value { font-size: 1.5rem; font-weight: 700; margin-top: 4px; }
+.summary-card { container-type: inline-size; }
+.summary-card .value { font-size: 1.25rem; font-weight: 700; margin-top: 4px; white-space: nowrap; overflow-wrap: normal; }
+@supports (font-size: 1cqi) { .summary-card .value { font-size: min(1.5rem, 16cqi); } } /* shrinks only if a long amount wouldn't fit the card */
+.bar-row .bar-amount, .budget-row .actual-amount, .budget-total-row span:last-child, .history-spent,
+.flow-row span:last-child, .debt-stats strong, .history-detail strong { white-space: nowrap; overflow-wrap: normal; }
 .value.positive { color: var(--color-primary); }
 .value.negative { color: var(--color-danger); }
 
@@ -284,7 +293,7 @@ main#view-container {
   gap: 10px;
   margin-bottom: 10px;
 }
-.bar-row .bar-label { flex: 0 0 130px; font-size: 0.95rem; }
+.bar-row .bar-label { flex: 0 0 7.2rem; font-size: 0.95rem; }
 .bar-track {
   flex: 1;
   background: var(--color-surface-alt);
@@ -293,7 +302,7 @@ main#view-container {
   overflow: hidden;
 }
 .bar-fill { height: 100%; border-radius: 6px; }
-.bar-row .bar-amount { flex: 0 0 90px; text-align: right; font-variant-numeric: tabular-nums; }
+.bar-row .bar-amount { flex: 0 0 auto; min-width: 5rem; text-align: right; font-variant-numeric: tabular-nums; }
 .bar-row { flex-wrap: wrap; }
 .bar-row .bar-change { flex: 0 0 100%; margin-top: -6px; font-size: 0.85rem; color: var(--color-text-muted); }
 
@@ -335,7 +344,7 @@ main#view-container {
 /* ---------- Budget grid ---------- */
 .budget-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 110px 100px;
+  grid-template-columns: minmax(0, 1fr) 6.5rem 6rem;
   align-items: center;
   gap: 10px;
   padding: 12px 0 4px;
@@ -364,9 +373,9 @@ main#view-container {
 .cat-dot { display: inline-block; width: 12px; height: 12px; border-radius: 50%; flex: none; vertical-align: middle; margin-bottom: 2px; }
 .budget-row .planned-input {
   width: 100%;
-  min-height: 40px;
+  min-height: var(--touch-min);
   padding: 6px 8px;
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--color-field-border);
   border-radius: var(--radius-sm);
   background: var(--color-surface);
   color: var(--color-text);
@@ -375,7 +384,7 @@ main#view-container {
 .budget-row .actual-amount { text-align: right; font-variant-numeric: tabular-nums; }
 .budget-head {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 110px 100px;
+  grid-template-columns: minmax(0, 1fr) 6.5rem 6rem;
   gap: 10px;
   padding-bottom: 6px;
   border-bottom: 2px solid var(--color-border);
@@ -436,9 +445,9 @@ main#view-container {
 .bill-sort { display: flex; align-items: center; gap: 8px; margin: 4px 0 8px; }
 .bill-sort label { font-weight: 600; }
 .bill-sort select {
-  min-height: 40px;
+  min-height: 44px;
   padding: 4px 8px;
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--color-field-border);
   border-radius: var(--radius-sm);
   background: var(--color-surface);
   color: var(--color-text);
@@ -448,14 +457,14 @@ main#view-container {
 .text-size-options .btn.active { background: var(--color-primary); color: var(--color-on-primary); border-color: var(--color-primary); }
 .bill-cat { display: flex; align-items: center; gap: 8px; margin-top: 6px; min-width: 0; }
 .bill-cat-select {
-  min-height: 40px;
+  min-height: 44px;
   min-width: 0;
   flex: 0 1 auto;
   text-overflow: ellipsis;
   max-width: 100%;
   padding: 4px 8px;
   font-size: 0.9rem;
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--color-field-border);
   border-radius: var(--radius-sm);
   background: var(--color-surface);
   color: var(--color-text);
@@ -541,7 +550,7 @@ main#view-container {
   width: 100%;
   min-height: var(--touch-min);
   padding: 8px 12px;
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--color-field-border);
   border-radius: var(--radius-sm);
   background: var(--color-surface);
   color: var(--color-text);
@@ -601,7 +610,8 @@ main#view-container {
   border-radius: var(--radius-sm);
   font-weight: 600;
   z-index: 300;
-  max-width: 90%;
+  width: max-content;
+  max-width: calc(100vw - 32px);
   text-align: center;
 }
 
@@ -623,7 +633,7 @@ main#view-container {
   min-width: 0;
   min-height: var(--touch-min);
   padding: 8px 12px;
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--color-field-border);
   border-radius: var(--radius-sm);
   background: var(--color-surface);
   color: var(--color-text);

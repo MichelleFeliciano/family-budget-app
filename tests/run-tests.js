@@ -210,7 +210,7 @@ test("fresh device: a brand-new empty device never overrides data already on Git
 test("data from disk or GitHub is cleaned up so a bad file can't brick the app", () => {
   const d = sanitizeData({ transactions: "oops", bills: null, categories: {}, debts: [null, { id: "d" }], tombstones: 5, budgetPlan: [] });
   for (const k of ["transactions", "bills", "categories", "debts", "tombstones"]) assert.ok(Array.isArray(d[k]), k);
-  assert.deepEqual(d.debts, [{ id: "d" }]);
+  assert.deepEqual(d.debts, [{ id: "d", currentBalance: 0, balanceAdjust: 0 }], "a debt with nothing on it gets a computed balance of 0");
   assert.equal(typeof d.budgetPlan, "object");
   assert.equal(Array.isArray(d.budgetPlan), false);
   store.set("familyBudget.data", JSON.stringify({ transactions: "oops" }));
@@ -352,45 +352,83 @@ test("unsynced changes are remembered between sessions", () => {
 });
 
 /* ------------------------------------------------------------------ */
-test("offline: service worker falls back to the saved copy, and never touches GitHub calls", async () => {
+test("offline: the service worker keeps working with no, slow or broken internet, and never touches GitHub calls", async () => {
   const base = "https://x.test/app/";
-  const listeners = {}, cacheStore = new Map(), deleted = [];
-  const resolve = (r) => (typeof r === "string" ? new URL(r, base).href : r.url);
+  const listeners = {}, cacheStore = new Map(), deleted = [], fetchInits = [], timers = [];
+  const key = (r, ignoreSearch) => { const u = new URL(typeof r === "string" ? r : r.url, base); if (ignoreSearch) u.search = ""; return u.href; };
+  function FakeRequest(url, init) { this.url = new URL(url, base).href; this.cache = init && init.cache; this.method = "GET"; this.mode = "cors"; }
   const fakeCaches = {
     open: async () => ({
-      addAll: async (files) => files.forEach((f) => cacheStore.set(resolve(f), new Response("cached:" + f))),
-      put: async (req, res) => { cacheStore.set(req.url, res); },
+      addAll: async (requests) => requests.forEach((r) => { assert.equal(r.cache, "reload", "install bypasses the browser's own cache"); cacheStore.set(key(r), new Response("cached:" + (r.url.replace(base, "") || "./"))); }),
+      put: async (req, res) => { cacheStore.set(key(req), res); },
     }),
     keys: async () => ["old-cache", "family-budget-v1"],
     delete: async (k) => { deleted.push(k); },
-    match: async (r) => { const hit = cacheStore.get(resolve(r)); return hit ? hit.clone() : undefined; },
+    match: async (r, opts = {}) => { const hit = cacheStore.get(key(r, opts.ignoreSearch)); return hit ? hit.clone() : undefined; },
   };
-  let online = true;
-  const fakeFetch = async (req) => { if (!online) throw new TypeError("Failed to fetch"); return new Response("network:" + req.url); };
+  let network = "up";                                 // "up" | "down" | "slow" | "error"
+  const fakeFetch = (req, init) => {
+    fetchInits.push(init);
+    if (network === "down") return Promise.reject(new TypeError("Failed to fetch"));
+    if (network === "slow") return new Promise(() => {});                       // never answers
+    if (network === "error") return Promise.resolve(new Response("site down", { status: 503 }));
+    return Promise.resolve(new Response("network:" + new URL(req.url).pathname.replace("/app/", "")));
+  };
+  const fakeTimeout = (fn, ms) => { timers.push({ fn, ms }); };
   const self_ = { addEventListener: (t, fn) => (listeners[t] = fn), location: { origin: "https://x.test" }, skipWaiting: async () => {}, clients: { claim: async () => {} } };
-  new Function("self", "caches", "fetch", read("sw.js"))(self_, fakeCaches, fakeFetch);
+  new Function("self", "caches", "fetch", "Request", "setTimeout", read("sw.js"))(self_, fakeCaches, fakeFetch, FakeRequest, fakeTimeout);
 
   const run = async (type) => { let p; listeners[type]({ waitUntil: (x) => (p = x) }); await p; };
   await run("install");
-  assert.ok(cacheStore.has(base + "index.html") && cacheStore.has(base + "js/app.js"), "app files are saved at install");
+  for (const f of ["index.html", "help.html", "js/app.js", "css/styles.css"]) assert.ok(cacheStore.has(base + f), `${f} is saved at install`);
   await run("activate");
   assert.deepEqual(deleted, ["old-cache"]);
 
-  const ask = async (req) => { let p = null; listeners.fetch({ request: req, respondWith: (x) => (p = x) }); return p ? await p : null; };
+  const ask = async (req) => { let p = null, kept = []; listeners.fetch({ request: req, respondWith: (x) => (p = x), waitUntil: (x) => kept.push(x) }); const res = p ? await p : null; await Promise.all(kept); return res; };
   const get = (path, extra = {}) => ({ method: "GET", url: base + path, mode: "cors", ...extra });
+  const text = async (res) => (await res).text();
 
-  assert.equal(await (await ask(get("js/app.js"))).text(), "network:" + base + "js/app.js", "online: always the network copy");
-  await new Promise((r) => setTimeout(r, 0));
-  assert.equal(await (await cacheStore.get(base + "js/app.js").clone()).text(), "network:" + base + "js/app.js", "online: the saved copy is refreshed");
+  // online
+  assert.equal(await text(ask(get("js/app.js"))), "network:js/app.js", "online: always the network copy");
+  assert.equal(fetchInits.at(-1).cache, "no-cache", "online: the browser must check with the server (GitHub Pages lets it reuse files for 10 minutes)");
+  assert.equal(await cacheStore.get(base + "js/app.js").clone().text(), "network:js/app.js", "online: the saved copy is refreshed");
+  assert.equal(timers.length > 0 && timers.every((t) => t.ms === 4000), true, "a 4-second limit is set on the network when a saved copy exists");
 
-  online = false;
-  assert.equal(await (await ask(get("js/app.js"))).text(), "network:" + base + "js/app.js", "offline: last saved copy");
-  assert.equal(await (await ask(get("", { mode: "navigate" }))).text(), "cached:./", "offline: opening the site root works");
-  assert.equal(await (await ask(get("somewhere/else", { mode: "navigate" }))).text(), "cached:index.html", "offline: unknown page falls back to the app");
+  // no connection at all
+  network = "down";
+  assert.equal(await text(ask(get("js/app.js"))), "network:js/app.js", "offline: last saved copy");
+  assert.equal(await text(ask(get("", { mode: "navigate" }))), "cached:./", "offline: opening the site root works");
+  assert.equal(await text(ask(get("somewhere/else", { mode: "navigate" }))), "cached:index.html", "offline: unknown page falls back to the app");
   assert.equal((await ask(get("nope.png"))).type, "error", "offline: a file that was never saved fails cleanly");
+
+  // a connection that neither works nor fails (weak signal)
+  network = "slow"; timers.length = 0;
+  const pending = ask(get("js/app.js"));
+  await new Promise((r) => setImmediate(r));
+  assert.ok(timers.length, "the limit is armed");
+  timers.forEach((t) => t.fn());                       // 4 seconds pass
+  assert.equal(await text(pending), "network:js/app.js", "slow: shows the saved copy instead of hanging");
+  network = "slow"; timers.length = 0;
+  const nothingSaved = ask(get("brand-new.js"));
+  await new Promise((r) => setImmediate(r));
+  assert.equal(timers.length, 0, "with nothing saved there's no point giving up on the network");
+
+  // the site is up but returning an error page
+  network = "error";
+  assert.equal(await text(ask(get("js/app.js"))), "network:js/app.js", "an error page doesn't replace the saved copy");
+  assert.equal((await ask(get("brand-new.js"))).status, 503, "with nothing saved the error is passed along");
+  assert.equal(await cacheStore.get(base + "js/app.js").clone().text(), "network:js/app.js", "and an error page is never saved");
+
+  // odd addresses don't pile up as copies of their own
+  network = "up"; const sizeBefore = cacheStore.size;
+  assert.equal(await text(ask(get("help.html?x=123"))), "network:help.html");
+  assert.equal(cacheStore.size, sizeBefore, "help.html?x=123 isn't saved separately");
+  network = "down";
+  assert.equal(await text(ask(get("help.html?x=999"))), "cached:help.html", "offline, an odd address still gets the saved page");
 
   assert.equal(await ask({ method: "GET", url: "https://api.github.com/repos/o/r/contents/data/budget-data.json", mode: "cors" }), null, "GitHub API calls are not intercepted");
   assert.equal(await ask({ method: "PUT", url: base + "js/app.js", mode: "cors" }), null, "writes are not intercepted");
+  void nothingSaved;
 });
 
 /* ------------------------------------------------------------------ */
@@ -1017,10 +1055,14 @@ test("css: phone rules come after the base rules they override", () => {
   assert.match(css.slice(mobile), /\.bar-row \.bar-track \{ flex: 0 0 100%; order: 3; \}/);
 });
 
-test("css: narrow screens — two summary cards fit across 360px phones, header wraps instead of crushing the title", () => {
+test("css: narrow screens — two summary cards fit across 360px phones at normal text, one per row at bigger text; header wraps", () => {
   const css = read("css/styles.css");
-  const min = Number(css.match(/\.summary-grid\s*\{[^}]*minmax\((\d+)px/)[1]);
-  assert.ok(2 * min + 12 <= 360 - 32, `two cards of ${min}px must fit in a 360px phone`);
+  const m = css.match(/\.summary-grid\s*\{[^}]*minmax\(max\((\d+)px,\s*([\d.]+)rem\),/);
+  assert.ok(m, "summary cards use a minimum that grows with the text size");
+  const column = (rootPx) => Math.max(Number(m[1]), Number(m[2]) * rootPx);
+  assert.ok(2 * column(18) + 12 <= 360 - 32, "normal text: two cards fit in a 360px phone");
+  assert.ok(2 * column(21) + 12 > 375 - 32, "large text: one card per row, so a long amount has room");
+  assert.ok(2 * column(24) + 12 > 375 - 32, "extra large text: one card per row");
   assert.match(css, /\.app-header\s*\{[^}]*flex-wrap:\s*wrap/);
   assert.doesNotMatch(css, /\.sync-status\s*\{[^}]*max-width:\s*50%/);
 });
@@ -1386,4 +1428,276 @@ test("recovery guide: covers every situation it promises, and its section links 
   for (const needle of ["Token expired", "passphraseHash", "Restore from Backup", "Download Backup", "Sync Now", "family-budget-data", "Contents → Read and write", "Delete"])
     assert.ok(md.includes(needle), `RECOVERY.md doesn't mention ${needle}`);
   assert.ok(read("README.md").includes("RECOVERY.md"));
+});
+
+/* ================== fixes from the second full review ================== */
+
+const clone = (x) => JSON.parse(JSON.stringify(x));
+
+test("restore: a restored item stays restored on every device, even ones that still hold its delete-marker", () => {
+  const backup = sanitizeData(mk({ bills: [{ id: "rent", name: "Rent", amount: 1000 }], lastUpdated: "2026-09-01T00:00:00.000Z" }));
+  const A = mk({ tombstones: ["bill:rent"], lastUpdated: "2026-10-05T00:00:00.000Z" });     // the mistaken delete, synced everywhere
+  const B = clone(A);
+  const C = clone(A);                                                                       // a third device that never saw the restore
+  const restoredA = { ...restoreFromBackup(A, backup), lastUpdated: "2026-10-09T10:00:00.000Z" };
+  assert.deepEqual(restoredA.bills.map((b) => b.id), ["rent"]);
+  assert.ok(restoredA.restoreEpoch);
+  const b1 = mergeData(B, restoredA);
+  assert.deepEqual(b1.bills.map((b) => b.id), ["rent"], "B pulls the restore: the bill is kept (it used to be deleted again)");
+  assert.ok(!b1.tombstones.includes("bill:rent"));
+  assert.deepEqual(mergeData(restoredA, b1).bills.map((b) => b.id), ["rent"], "and pushing back doesn't undo it");
+  assert.deepEqual(mergeData(C, b1).bills.map((b) => b.id), ["rent"], "a device that merges later agrees");
+  assert.equal(mergeData(b1, C).restoreEpoch, restoredA.restoreEpoch);
+  // deleting it again afterwards still works and sticks
+  const again = { ...b1, bills: [], tombstones: [...b1.tombstones, "bill:rent"], lastUpdated: "2026-10-10T00:00:00.000Z" };
+  assert.deepEqual(mergeData(restoredA, again).bills, [], "a later deliberate delete wins");
+  assert.deepEqual(mergeData(again, restoredA).bills, []);
+});
+
+test("restore: things the restore removes stay removed; the restore's budget plan replaces the old one", () => {
+  const current = mk({ transactions: [{ id: "keep" }, { id: "gone" }], budgetPlan: { "2026-09": { food: 999 } }, lastUpdated: "2026-10-05T00:00:00.000Z" });
+  const backup = sanitizeData(mk({ transactions: [{ id: "keep" }], budgetPlan: { "2026-09": { food: 100 } }, lastUpdated: "2026-09-01T00:00:00.000Z" }));
+  const restored = { ...restoreFromBackup(current, backup), lastUpdated: "2026-10-09T00:00:00.000Z" };
+  const stale = clone(current);                                       // another phone still showing the pre-restore data
+  const merged = mergeData(stale, restored);
+  assert.deepEqual(merged.transactions.map((t) => t.id), ["keep"], "the stale phone's copy of 'gone' doesn't come back");
+  assert.deepEqual(merged.budgetPlan, { "2026-09": { food: 100 } }, "stale planned amounts don't leak back in");
+  const noRestore = mergeData(mk({ budgetPlan: { a: { x: 1 } } }), mk({ budgetPlan: { b: { y: 2 } }, lastUpdated: "2026-05-01T00:00:00.000Z" }));
+  assert.deepEqual(Object.keys(noRestore.budgetPlan).sort(), ["a", "b"], "without a restore, plans are still combined");
+});
+
+test("restore: paychecks the app added on its own come back after restoring an older backup", () => {
+  const src = { id: "s1", name: "Pay", amount: 100, categoryId: "income", frequency: "weekly", anchorDate: "2026-08-07", startedOn: "2026-08-01" };
+  const today = at("2026-10-09");
+  const current = mk({ recurringIncome: [src] });
+  current.transactions.push(...duePaychecks(current, today));
+  assert.equal(current.transactions.length, 10);
+  const old = sanitizeData(mk({ recurringIncome: [src], transactions: current.transactions.filter((t) => t.date <= "2026-08-31") }));
+  const restored = restoreFromBackup(current, old);
+  assert.equal(restored.transactions.length, 4);
+  assert.deepEqual(restored.tombstones.filter((t) => t.startsWith("transaction:pay-")), [], "not marked deleted");
+  assert.equal(duePaychecks(restored, today).length, 6, "September and October's pay is filled back in");
+  const userDeleted = { ...restored, tombstones: [...restored.tombstones, "transaction:pay-s1-2026-09-04"] };
+  assert.equal(duePaychecks(userDeleted, today).length, 5, "one the person deleted on purpose stays deleted");
+});
+
+test("restore: an old backup never puts an old passphrase back", () => {
+  const r = restoreFromBackup(mk({ passphraseHash: "NEW" }), sanitizeData(mk({ passphraseHash: "OLD" })));
+  assert.equal(r.passphraseHash, "NEW");
+  assert.equal(restoreFromBackup(mk({ passphraseHash: null }), sanitizeData(mk({ passphraseHash: "FROM-BACKUP" }))).passphraseHash, "FROM-BACKUP", "a device with none yet takes the backup's");
+  assert.equal(restoreFromBackup(mk({ passphraseHash: "NEW" }), sanitizeData(mk({ passphraseHash: null }))).passphraseHash, "NEW");
+});
+
+test("debt balances: payments logged on two phones before syncing both count", () => {
+  const base = mk({ debts: [{ id: "d1", name: "Visa", originalBalance: 1000, currentBalance: 1000, minPayment: 50 }] });
+  const A = clone(base), B = clone(base);
+  const pay = (data, id, amount) => { data.transactions.push(adjustDebtForTransactionChange(data, null, { id, type: "expense", date: "2026-10-05", categoryId: "debt", amount, debtId: "d1" })); reconcileDebts(data); };
+  pay(A, "payA", 100); A.lastUpdated = "2026-10-05T10:00:00.000Z";
+  pay(B, "payB", 50); B.lastUpdated = "2026-10-05T10:00:05.000Z";
+  assert.equal(A.debts[0].currentBalance, 900);
+  const m1 = mergeData(A, B), m2 = mergeData(B, A);
+  assert.equal(m1.debts[0].currentBalance, 850, "1000 - 100 - 50 (it used to say 950)");
+  assert.equal(m2.debts[0].currentBalance, 850, "whichever way round");
+  assert.equal(mergeData(m1, A).debts[0].currentBalance, 850, "and again after another sync");
+});
+
+test("debt balances: a balance typed by hand sticks, later payments still come off it, deleting one gives it back", () => {
+  const data = mk({ debts: [{ id: "d1", name: "Visa", originalBalance: 3000, currentBalance: 2000 }] });   // an older debt, no balanceAdjust yet
+  reconcileDebts(data);
+  assert.equal(data.debts[0].currentBalance, 2000);
+  assert.equal(data.debts[0].balanceAdjust, -1000, "remembers the hand-set difference");
+  data.transactions.push(adjustDebtForTransactionChange(data, null, { id: "p1", type: "expense", amount: 300, debtId: "d1" })); reconcileDebts(data);
+  assert.equal(data.debts[0].currentBalance, 1700);
+  data.debts[0] = { ...data.debts[0], currentBalance: 1500 }; delete data.debts[0].balanceAdjust; reconcileDebts(data);   // the person types 1500 in the form
+  assert.equal(data.debts[0].currentBalance, 1500, "what they typed");
+  removeTransaction(data, "p1"); reconcileDebts(data);
+  assert.equal(data.debts[0].currentBalance, 1800, "deleting the payment gives its 300 back");
+  assert.equal(reconcileDebts(clone(data)).debts[0].currentBalance, 1800, "running it again changes nothing");
+});
+
+test("debt balances: never below zero, even if two phones both paid off the last of it", () => {
+  const base = mk({ debts: [{ id: "d1", name: "V", originalBalance: 100, currentBalance: 100 }] });
+  const A = clone(base), B = clone(base);
+  for (const [dev, id] of [[A, "a"], [B, "b"]]) { dev.transactions.push(adjustDebtForTransactionChange(dev, null, { id, type: "expense", amount: 80, debtId: "d1" })); reconcileDebts(dev); }
+  const m = mergeData(A, B);
+  assert.equal(m.debts[0].currentBalance, 0);
+  removeTransaction(m, "a"); reconcileDebts(m);
+  assert.equal(m.debts[0].currentBalance, 20, "taking one back leaves what the other really paid");
+});
+
+test("debt balances: random two-phone sessions always end with the same, correct balance", () => {
+  let seed = 777; const rnd = () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
+  const ri = (a, b) => a + Math.floor(rnd() * (b - a + 1));
+  const pick = (list) => list[ri(0, list.length - 1)];
+  for (let round = 0; round < 400; round++) {
+    const start = ri(200, 3000);
+    let A = reconcileDebts(mk({ debts: [{ id: "d1", name: "V", originalBalance: start, currentBalance: start }] })), B = clone(A);
+    let n = 0, t = 0;
+    const stamp = () => new Date(Date.UTC(2026, 9, 1, 0, 0, ++t)).toISOString();
+    for (let step = 0; step < ri(3, 14); step++) {
+      const dev = rnd() < 0.5 ? A : B;
+      const action = rnd();
+      if (action < 0.55) { dev.transactions.push(adjustDebtForTransactionChange(dev, null, { id: "t" + ++n, type: "expense", amount: ri(1, 400), debtId: "d1" })); }
+      else if (action < 0.75 && dev.transactions.length) { removeTransaction(dev, pick(dev.transactions).id); }
+      else if (action < 0.85) { dev.debts[0].currentBalance = ri(0, start); delete dev.debts[0].balanceAdjust; }
+      else if (action < 0.95) { const other = dev === A ? B : A; const m = mergeData(dev, other); if (dev === A) A = m; else B = m; }
+      reconcileDebts(dev); dev.lastUpdated = stamp();
+    }
+    const m1 = mergeData(A, B), m2 = mergeData(B, A);
+    assert.equal(m1.debts[0].currentBalance, m2.debts[0].currentBalance, "both devices agree");
+    const applied = m1.transactions.filter((x) => x.debtId === "d1").reduce((sum, x) => sum + x.debtApplied, 0);
+    assert.ok(m1.debts[0].currentBalance >= 0);
+    assert.equal(m1.debts[0].currentBalance, Math.max(0, roundCents(m1.debts[0].originalBalance - applied + m1.debts[0].balanceAdjust)), "balance matches the payments");
+  }
+});
+
+test("odd numbers in a file are cleaned up instead of wiping totals", () => {
+  const d = sanitizeData({
+    categories: [{ id: "x", name: "X", type: "bogus", color: "#abc" }, { id: "y", name: "Y", type: "income", color: "#abc" }],
+    transactions: [{ id: "1", date: "2026-10-01", type: "expense", amount: 50 }, { id: "2", date: "2026-10-02", type: "expense", amount: "1,200" }, { id: "3", date: 20261003, type: "expense", amount: "$300" }, { id: "4", date: "2026-10-04", type: "expense", amount: "abc" }, { id: "5", date: "2026-10-05", type: "expense", amount: null }],
+    debts: [{ id: "a", currentBalance: "$500", originalBalance: "1,000", interestRate: "<img src=x onerror=1>", minPayment: 25 }],
+    bills: [{ id: "b", name: "B", amount: "1,000", dueDay: "15" }, { id: "c", name: "C", amount: 20, dueDay: null }],
+  });
+  assert.deepEqual(d.categories.map((c) => c.type), ["expense", "income"], "a category is income or expense");
+  assert.deepEqual(d.transactions.map((x) => x.amount), [50, 1200, 300, 0, null], "readable amounts kept, junk becomes 0, null left alone");
+  assert.equal(d.transactions[2].date, "20261003", "a number date becomes text instead of crashing later");
+  assert.equal(monthTotals(d, "2026-10").expenses, 1250, "50 + 1,200: the unreadable amount no longer zeroes the month (the 300 has a date that is not a date, so it is not in October)");
+  assert.equal(d.debts[0].interestRate, 0, "text can't ride in on a number field");
+  assert.equal(d.debts[0].currentBalance, 500);
+  assert.equal(d.bills[0].amount, 1000);
+  assert.equal(d.bills[0].dueDay, 15);
+  assert.equal(d.bills[1].dueDay, null);
+  assert.equal(getBillsDueInPeriod(d.bills, { frequency: "weekly", anchorDate: "2026-10-02" }, at("2026-10-09")).total, 1000, "the 1,000 bill is due on the 15th; the other has no due day");
+  assert.deepEqual(orderDebts([{ id: "a", currentBalance: 100 }, { id: "b" }, { id: "c", currentBalance: "abc" }], "snowball").map((x) => x.id), ["a", "b", "c"], "a debt with no readable balance isn't dropped from the list");
+  assert.equal(toNumber("  $1,234.50 "), 1234.5);
+  assert.equal(toNumber(Infinity), 0);
+  assert.equal(toNumber({}), 0);
+});
+
+test("bills sort by category even when a category has no name", () => {
+  const bills = [{ id: "1", name: "A", categoryId: "x" }, { id: "2", name: "B", categoryId: "bills" }];
+  assert.doesNotThrow(() => sortBills(bills, "category", [{ id: "x" }, { id: "bills", name: "Bills" }]));
+});
+
+test("payoff months at 0% interest are exact in whole cents", () => {
+  assert.equal(estimateMonthsToPayoff(277.56, 0, 10.28).months, 27);
+  assert.equal(estimateMonthsToPayoff(72.45, 0, 10.35).months, 7);
+  assert.equal(estimateMonthsToPayoff(100, 0, 33).months, 4, "a real remainder still takes another month");
+  assert.equal(estimateMonthsToPayoff(100, 0, 100).months, 1);
+  let seed = 99; const rnd = () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
+  for (let i = 0; i < 3000; i++) {
+    const cents = 2 + Math.floor(rnd() * 5000), n = 1 + Math.floor(rnd() * 60), extra = rnd() < 0.5 ? 0 : 1 + Math.floor(rnd() * (cents - 1));
+    const M = cents / 100, P = (cents * n + extra) / 100;
+    const expected = extra ? n + 1 : n;
+    assert.equal(estimateMonthsToPayoff(P, 0, M).months, expected, `P=${P} M=${M}`);
+    assert.equal(simulatePayoff([{ name: "d", currentBalance: P, interestRate: 0, minPayment: M }], "snowball").months, expected, "and the projection agrees");
+  }
+});
+
+/* ------------------------------------------------------------------ */
+test("accessibility: the outline of a field or button is visible (3:1) against its surroundings, light and dark", () => {
+  const css = read("css/styles.css");
+  const light = parseVars(css.match(/:root\s*\{([^}]*)\}/)[1]);
+  const dark = { ...light, ...parseVars(css.match(/prefers-color-scheme: dark\)\s*\{\s*:root\s*\{([^}]*)\}/)[1]) };
+  const fails = [];
+  for (const [mode, v] of [["light", light], ["dark", dark]])
+    for (const bg of ["--color-surface", "--color-bg"]) { const r = contrast(v["--color-field-border"], v[bg]); if (r < 3) fails.push(`${mode}: field outline on ${bg} = ${r.toFixed(2)}:1`); }
+  assert.deepEqual(fails, []);
+  for (const selector of [".btn {\n  display: inline-flex;", ".lock-card input {", ".budget-row .planned-input {", ".bill-sort select {", ".bill-cat-select {", ".form-group textarea {", ".search-box input {"]) {
+    const at = css.indexOf(selector); assert.ok(at > -1, selector);
+    assert.match(css.slice(at, css.indexOf("}", at)), /var\(--color-field-border\)/, `${selector.trim().split("\n")[0]} uses the visible outline`);
+  }
+});
+
+test("css: money stays whole, toasts get their own width, focus rings and touch targets", () => {
+  const css = read("css/styles.css");
+  const nowrap = css.match(/(\.bar-row \.bar-amount[^{]*)\{\s*white-space:\s*nowrap;\s*overflow-wrap:\s*normal/);
+  assert.ok(nowrap, "a rule keeps money amounts in one piece");
+  for (const sel of [".bar-row .bar-amount", ".budget-row .actual-amount", ".history-spent", ".flow-row span:last-child"]) assert.ok(nowrap[1].includes(sel), `${sel} is in the keep-whole rule`);
+  assert.match(css, /\.summary-card \.value\s*\{[^}]*white-space:\s*nowrap/);
+  assert.match(css, /container-type:\s*inline-size/, "a long total shrinks to fit its card instead of overflowing");
+  assert.match(css, /\.toast\s*\{[^}]*width:\s*max-content;[^}]*max-width:\s*calc\(100vw - 32px\)/, "a toast isn't capped at half the screen");
+  assert.doesNotMatch(css, /\.toast\s*\{[^}]*max-width:\s*90%/);
+  assert.match(css, /\.tab:focus-visible\s*\{\s*outline-offset:\s*-4px/, "the tab bar's focus ring isn't clipped");
+  assert.match(css, /\.btn-link\s*\{[^}]*min-height:\s*44px/);
+  assert.match(css, /\.budget-row \.planned-input\s*\{[^}]*min-height:\s*var\(--touch-min\)/);
+  assert.match(css, /\.bill-cat-select\s*\{[^}]*min-height:\s*44px/);
+  assert.match(css, /\.lock-card summary\s*\{[^}]*min-height:\s*44px/, "the 'connect to GitHub' link is easy to tap");
+  assert.doesNotMatch(css, /grid-template-columns:\s*minmax\(0,\s*1fr\)\s*110px\s*100px/, "the budget columns grow with the text size");
+});
+
+test("quick guide follows the Text Size setting on screen and prints at one fixed size", () => {
+  const html = read("help.html");
+  assert.match(html, /html\[data-text-size="large"\]\s*\{\s*font-size:\s*15pt/);
+  assert.match(html, /html\[data-text-size="xlarge"\]\s*\{\s*font-size:\s*17pt/);
+  assert.match(html, /familyBudget\.textSize/);
+  const screenCss = html.slice(0, html.indexOf("@media print"));
+  const printCss = html.slice(html.indexOf("@media print"));
+  assert.match(printCss, /html, html\[data-text-size\]\s*\{\s*font-size:\s*12pt/, "paper is always 12pt");
+  assert.deepEqual(screenCss.match(/font-size:\s*\d+(\.\d+)?pt/g), ["font-size: 13pt", "font-size: 15pt", "font-size: 17pt"], "on screen the only fixed sizes are the three root sizes; everything else scales from them");
+});
+
+test("app wiring from the second review: redraws, dialogs, in-place budget edits, labels", () => {
+  const app = read("js/app.js");
+  // background redraws never replace a field being typed in
+  assert.match(app, /function userIsTyping\(\)/);
+  assert.match(app, /function renderInBackground\(\) \{\s*updateAlertBanner\(\);\s*if \(!userIsTyping\(\)\) render\(\);/);
+  for (const where of ["pullAndMergeSilently", "handleSyncNow", "checkRepoVisibility"]) {
+    const body = app.slice(app.indexOf("function " + where) + (where === "pullAndMergeSilently" ? 6 : 0), app.indexOf("function " + where) + 1500).split(/\n(?:async )?function /)[0];
+    assert.match(body, /renderInBackground\(\)/, `${where} redraws politely`);
+    assert.doesNotMatch(body.replace(/renderInBackground\(\)/g, ""), /[^.\w]render\(\)/, `${where} has no bare render()`);
+  }
+  // dialogs
+  assert.match(app, /role="dialog" aria-modal="true" tabindex="-1"/);
+  assert.match(app, /byId\("app"\)\.inert = true/);
+  assert.match(app, /byId\("app"\)\.inert = false/);
+  assert.match(app, /e\.key === "Escape" && byId\("modal-root"\)\.innerHTML/);
+  assert.match(app, /pressedBackdrop = e\.target\.id === "modal-backdrop"/, "closing needs the press to start on the backdrop");
+  assert.match(app, /Date\.now\(\) - modalOpenedAt > 350/, "a double-tap can't close it straight away");
+  // budget amounts update in place
+  assert.match(app, /updatePlannedRow\(el\);/);
+  assert.doesNotMatch(app.slice(app.indexOf('el.matches(".planned-input")'), app.indexOf('el.id === "extra-debt-select"')), /setTimeout|renderKeepingFocus|render\(\)/);
+  // data and forms
+  assert.match(app, /reconcileDebts\(state\.data\);/);
+  assert.match(app, /categoryOptions\(txn\.type, txn\.categoryId, isEdit\)/);
+  assert.match(app, /categoryOptions\("income", pay\.categoryId, isEdit\)/);
+  assert.match(app, /recategorizeBill\(d, updated\.id, updated\.categoryId\)/);
+  assert.match(app, /clearTimeout\(state\.saveTimer\);[^]*?setDirty\(false\);[^]*?clearGithubConfig\(\)/, "Disconnect cancels a waiting save");
+  assert.match(app, /if \(!state\.githubConfig\) return; \/\/ disconnected/);
+  assert.match(app, /state\.month === state\.loadedMonth && currentMonthKey\(\) !== state\.loadedMonth/, "a new month moves the screen on");
+  assert.match(app, /window\.scrollTo\(0, 0\);\s*\}\);\s*\}\);/, "a new tab starts at the top");
+  // names and state for assistive technology
+  assert.match(app, /aria-label="Edit \$\{escapeHtml\(b\.name\)\}"/);
+  assert.match(app, /aria-label="Mark \$\{escapeHtml\(bill\.name\)\} paid"/);
+  assert.match(app, /aria-pressed="\$\{state\.debtStrategy === "snowball"\}"/);
+  assert.match(app, /aria-pressed="\$\{getTextSize\(\) === v\}"/);
+  assert.match(app, /t\.setAttribute\("aria-current", "page"\)/);
+  assert.equal(new Set((app.match(/const colorNames = \[([^\]]*)\]/) || [, ""])[1].split(",").map((x) => x.trim())).size, 9, "nine different colour names");
+  assert.match(read("index.html"), /<div id="toast-root" role="status" aria-live="polite">/);
+  assert.doesNotMatch(app, /\(\$\{c\.type\}\)/, "a category's type is escaped like everything else");
+  assert.doesNotMatch(app, /<strong>\$\{d\.interestRate \|\| 0\}%/, "so is a debt's interest rate");
+});
+
+test("a deleted category shows as Uncategorized and stays that way when the record is edited", () => {
+  const html = `<select>${(function categoryOptions(type, selectedId, keepMissing = false) {
+    const cats = [{ id: "food", name: "Food", type: "expense" }, { id: "inc", name: "Pay", type: "income" }];
+    const opts = cats.filter((c) => c.type === type);
+    const missing = keepMissing && selectedId && !opts.some((c) => c.id === selectedId) ? `<option value="${selectedId}" selected>Uncategorized</option>` : "";
+    return missing + opts.map((c) => `<option value="${c.id}" ${c.id === selectedId ? "selected" : ""}>${c.name}</option>`).join("");
+  })("expense", "deleted-cat", true)}</select>`;
+  assert.match(html, /<option value="deleted-cat" selected>Uncategorized<\/option>/);
+  const app = read("js/app.js");
+  const fn = app.slice(app.indexOf("function categoryOptions"), app.indexOf("function showToast"));
+  assert.match(fn, /const missing = keepMissing && selectedId && !opts\.some\(\(c\) => c\.id === selectedId\)/, "the real function has the same rule as the one checked above");
+});
+
+test("debt-free card wording: no doubled 'about'", () => {
+  const app = read("js/app.js");
+  assert.doesNotMatch(app, /About \$\{years\(/, "years() already says 'about' for long spans");
+  assert.match(app, /\$\{sentenceStart\(years\(base\.months\)\)\} from now/);
+  const years = (m) => (m >= 24 ? `about ${Math.round(m / 12)} years` : `${m} month${m === 1 ? "" : "s"}`);
+  const start = (text) => text.charAt(0).toUpperCase() + text.slice(1);
+  assert.equal(start(years(228)) + " from now", "About 19 years from now");
+  assert.equal(start(years(23)) + " from now", "23 months from now");
+  assert.equal(start(years(1)) + " from now", "1 month from now");
 });

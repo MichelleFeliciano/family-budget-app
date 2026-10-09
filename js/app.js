@@ -7,6 +7,7 @@ const state = {
   githubConfig: null,
   view: "dashboard",
   month: currentMonthKey(),
+  loadedMonth: currentMonthKey(), // the month the screen opened on; if still showing it when a new month starts, move on
   txnShowAll: false,
   debtStrategy: "snowball",
   sha: null,
@@ -40,10 +41,14 @@ function escapeHtml(str) {
   }[c]));
 }
 
-function categoryOptions(type, selectedId) {
+// `keepMissing`: when editing a record whose category no longer exists, offer "Uncategorized"
+// (keeping the old value) instead of silently moving it to the first category in the list.
+function categoryOptions(type, selectedId, keepMissing = false) {
   const opts = state.data.categories.filter((c) => c.type === type);
-  if (!opts.length) return '<option value="">No categories yet</option>';
-  return opts
+  const missing = keepMissing && selectedId && !opts.some((c) => c.id === selectedId)
+    ? `<option value="${escapeHtml(selectedId)}" selected>Uncategorized</option>` : "";
+  if (!opts.length && !missing) return '<option value="">No categories yet</option>';
+  return missing + opts
     .map((c) => `<option value="${escapeHtml(c.id)}" ${c.id === selectedId ? "selected" : ""}>${escapeHtml(c.name)}</option>`)
     .join("");
 }
@@ -96,15 +101,35 @@ function deleteWithUndo(message, fn) {
   });
 }
 
+let modalReturnFocus = null;
+let modalOpenedAt = 0;
+
 function openModal(html) {
-  byId("modal-root").innerHTML = `<div class="modal-backdrop" id="modal-backdrop"><div class="modal">${html}</div></div>`;
-  byId("modal-backdrop").addEventListener("click", (e) => {
-    if (e.target.id === "modal-backdrop") closeModal();
+  const root = byId("modal-root");
+  if (!root.innerHTML) modalReturnFocus = document.activeElement; // remember where to return (not when one dialog opens over another)
+  root.innerHTML = `<div class="modal-backdrop" id="modal-backdrop"><div class="modal" role="dialog" aria-modal="true" tabindex="-1">${html}</div></div>`;
+  modalOpenedAt = Date.now();
+  byId("app").inert = true; // the page behind can't be tabbed into or read while a dialog is open
+  const backdrop = byId("modal-backdrop");
+  const dialog = backdrop.firstElementChild;
+  const heading = dialog.querySelector("h2");
+  if (heading) { heading.id = "modal-title"; dialog.setAttribute("aria-labelledby", "modal-title"); }
+  // Tapping the dim area closes the dialog, but only if the press *started* there (selecting text and
+  // letting go outside the card must not throw the form away) and not as the second half of a double-tap.
+  let pressedBackdrop = false;
+  backdrop.addEventListener("pointerdown", (e) => { pressedBackdrop = e.target.id === "modal-backdrop"; });
+  backdrop.addEventListener("click", (e) => {
+    if (e.target.id === "modal-backdrop" && pressedBackdrop && Date.now() - modalOpenedAt > 350) closeModal();
+    pressedBackdrop = false;
   });
+  dialog.focus();
 }
 
 function closeModal() {
   byId("modal-root").innerHTML = "";
+  byId("app").inert = false;
+  if (modalReturnFocus && document.contains(modalReturnFocus) && typeof modalReturnFocus.focus === "function") modalReturnFocus.focus();
+  modalReturnFocus = null;
 }
 
 function confirmAction(message, onConfirm) {
@@ -123,6 +148,7 @@ function confirmAction(message, onConfirm) {
 
 function mutateData(fn, { render: shouldRender = true } = {}) {
   fn(state.data);
+  reconcileDebts(state.data); // a debt's balance always follows its payments (see calculations.js)
   state.data.lastUpdated = new Date().toISOString();
   state.editSeq++;
   saveLocalData(state.data);
@@ -146,6 +172,7 @@ function scheduleSync() {
   setSyncStatus("syncing", "Saving…");
   clearTimeout(state.saveTimer);
   state.saveTimer = setTimeout(async () => {
+    if (!state.githubConfig) return; // disconnected while this was waiting
     // Only mark "synced" if nothing was edited while this push was in flight.
     const seq = state.editSeq;
     const markPushed = () => { if (state.editSeq === seq) setDirty(false); };
@@ -161,7 +188,7 @@ function scheduleSync() {
         state.sha = await syncPush(state.githubConfig, state.data, sha);
         markPushed();
         setSyncStatus("ok", "Synced");
-        render();
+        renderInBackground();
       } catch (retryErr) {
         console.error(retryErr);
         setSyncStatus("error", describeSyncError(retryErr));
@@ -179,7 +206,7 @@ async function pullAndMergeSilently() {
     state.sha = sha;
     setSyncStatus("ok", "Synced");
     addDuePaychecks(); // after merging, so this device never invents a paycheck another one already removed
-    if (!byId("app").classList.contains("hidden")) render();
+    if (!byId("app").classList.contains("hidden")) renderInBackground();
     if (isDirty()) scheduleSync(); // changes from an earlier session or a failed save
   } catch (e) {
     console.error(e);
@@ -280,6 +307,7 @@ function wireApp() {
     btn.addEventListener("click", () => {
       state.view = btn.dataset.view;
       render();
+      window.scrollTo(0, 0);
     });
   });
   byId("view-container").addEventListener("click", handleViewClick);
@@ -293,11 +321,19 @@ function wireApp() {
   byId("modal-root").addEventListener("click", (e) => {
     if (e.target.closest('[data-action="modal-cancel"]')) closeModal();
   });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && byId("modal-root").innerHTML) closeModal();
+  });
   window.addEventListener("online", pullAndMergeSilently);
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible" && !byId("app").classList.contains("hidden")) {
+      // The app stayed open into a new month and is still showing the month it opened on: move on.
+      if (state.month === state.loadedMonth && currentMonthKey() !== state.loadedMonth) {
+        state.month = state.loadedMonth = currentMonthKey();
+        renderInBackground();
+      }
       if (state.githubConfig) pullAndMergeSilently();
-      else if (addDuePaychecks()) render(); // the app stayed open past midnight
+      else if (addDuePaychecks()) renderInBackground(); // the app stayed open past midnight
     }
   });
 }
@@ -359,10 +395,9 @@ function handleViewChange(e) {
       // The first change in a month that was showing a carried-over plan saves the whole plan for this month.
       d.budgetPlan[state.month] = { ...planForMonth(d.budgetPlan, state.month).plan, [catId]: value };
     }, { render: false });
-    // Redrawing destroys the input the user is tabbing into, which dropped
-    // their place after every amount. Wait for focus to land on the next
-    // field, redraw, then put focus back on that same field.
-    setTimeout(renderKeepingFocus, 0);
+    // Update just this row. (Redrawing the page here replaced whatever the person was pressing next,
+    // so a slow tap on the month arrows right after typing an amount did nothing.)
+    updatePlannedRow(el);
   }
   if (el.id === "extra-debt-select") {
     state.extraDebtPayment = Number(el.value) || 0;
@@ -415,10 +450,23 @@ async function checkRepoVisibility(announce) {
   const isPublic = await githubRepoIsPublic(state.githubConfig);
   state.repoPublic = isPublic === true;
   if (isPublic === true && announce) showToast("Warning: that repository is public — anyone can read your budget.");
-  if (!byId("app").classList.contains("hidden")) render();
+  if (!byId("app").classList.contains("hidden")) renderInBackground();
 }
 
 /* ---------- Render dispatcher ---------- */
+
+// Is the person in the middle of typing in (or choosing from) a field on screen?
+function userIsTyping() {
+  const active = document.activeElement;
+  return !!active && byId("view-container").contains(active) && /^(INPUT|SELECT|TEXTAREA)$/.test(active.tagName);
+}
+
+// For redraws nobody asked for (a sync finishing, coming back to the app): never replace a
+// field the person is using, or what they typed vanishes. The next change redraws anyway.
+function renderInBackground() {
+  updateAlertBanner();
+  if (!userIsTyping()) render();
+}
 
 // Redraws the screen, then puts keyboard focus back on the same control
 // (found by its data-focus-key) so editing in place doesn't lose your spot.
@@ -434,7 +482,11 @@ function renderKeepingFocus() {
 
 function render() {
   updateAlertBanner();
-  document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.dataset.view === state.view));
+  document.querySelectorAll(".tab").forEach((t) => {
+    const here = t.dataset.view === state.view;
+    t.classList.toggle("active", here);
+    if (here) t.setAttribute("aria-current", "page"); else t.removeAttribute("aria-current");
+  });
   const container = byId("view-container");
   if (state.view === "dashboard") container.innerHTML = renderDashboard();
   else if (state.view === "budget") container.innerHTML = renderBudget();
@@ -513,8 +565,8 @@ function renderGoalsCard() {
         <div class="debt-progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}" aria-label="${escapeHtml(g.name)} progress"><div class="goal-fill" style="width:${pct}%;"></div></div>
         <div class="goal-meta">${formatMoney(saved)} of ${formatMoney(target)} (${pct}%)${!done && target > saved ? ` • ${formatMoney(target - saved)} to go` : ""}</div>
         <div class="debt-actions">
-          <button class="btn btn-primary" data-action="add-to-goal" data-id="${escapeHtml(g.id)}">Add Money</button>
-          <button class="btn" data-action="edit-goal" data-id="${escapeHtml(g.id)}">Edit</button>
+          <button class="btn btn-primary" data-action="add-to-goal" data-id="${escapeHtml(g.id)}" aria-label="Add money to ${escapeHtml(g.name)}">Add Money</button>
+          <button class="btn" data-action="edit-goal" data-id="${escapeHtml(g.id)}" aria-label="Edit ${escapeHtml(g.name)}">Edit</button>
         </div>
       </div>`;
   }).join("");
@@ -541,7 +593,7 @@ function renderComingUpCard() {
         <div class="bill-name">${escapeHtml(bill.name)}</div>
         <div class="bill-meta"><strong>${label}</strong> • ${formatMoney(bill.amount)}</div>
       </div>
-      <button class="btn btn-primary" data-action="mark-bill-paid" data-id="${escapeHtml(bill.id)}" data-due="${toLocalISODate(dueDate)}">Mark Paid</button>
+      <button class="btn btn-primary" data-action="mark-bill-paid" data-id="${escapeHtml(bill.id)}" data-due="${toLocalISODate(dueDate)}" aria-label="Mark ${escapeHtml(bill.name)} paid">Mark Paid</button>
     </div>`;
   const lateBlock = late.length ? `
       <h3 class="overdue-title">Not marked paid yet</h3>
@@ -585,6 +637,31 @@ function renderHistoryCard() {
     </div>`;
 }
 
+// How full a category's bar is, and what colour: red once spending passes the plan.
+function plannedBar(planned, actual, color) {
+  const pct = planned > 0 ? Math.min(100, Math.round((actual / planned) * 100)) : actual > 0 ? 100 : 0;
+  const over = planned > 0 && actual > planned;
+  return { pct, barColor: over ? "var(--color-danger)" : pct >= 90 ? "var(--color-warning)" : color };
+}
+
+// After an amount is typed: redraw that row's bar, the planned total, and drop the "showing last month's plan" note.
+function updatePlannedRow(input) {
+  const { plan, from } = planForMonth(state.data.budgetPlan, state.month);
+  const category = getCategory(input.dataset.categoryId);
+  const row = input.closest(".budget-row");
+  if (row && category) {
+    const actual = sumTransactions(state.data.transactions, { monthKey: state.month, categoryId: category.id, type: "expense" });
+    const { pct, barColor } = plannedBar(Number(plan[category.id] || 0), actual, category.color);
+    const fill = row.querySelector(".bar-fill");
+    if (fill) { fill.style.width = pct + "%"; fill.style.background = barColor; }
+  }
+  const total = state.data.categories.filter((c) => c.type === "expense").reduce((sum, c) => sum + Number(plan[c.id] || 0), 0);
+  const totalEl = byId("planned-total");
+  if (totalEl) totalEl.textContent = `Planned total: ${formatMoney(total)}`;
+  const note = document.querySelector(".carry-note");
+  if (note && !from) note.remove();
+}
+
 function renderBudget() {
   const cats = state.data.categories.filter((c) => c.type === "expense");
   const { plan, from: planFrom } = planForMonth(state.data.budgetPlan, state.month);
@@ -592,9 +669,7 @@ function renderBudget() {
   const rows = cats.map((c) => {
     const planned = Number(plan[c.id] || 0);
     const actual = sumTransactions(state.data.transactions, { monthKey: state.month, categoryId: c.id, type: "expense" });
-    const pct = planned > 0 ? Math.min(100, Math.round((actual / planned) * 100)) : actual > 0 ? 100 : 0;
-    const over = planned > 0 && actual > planned;
-    const barColor = over ? "var(--color-danger)" : pct >= 90 ? "var(--color-warning)" : c.color;
+    const { pct, barColor } = plannedBar(planned, actual, c.color);
     return `
       <div class="budget-row">
         <span class="cat-pill"><span class="cat-dot" style="background:${escapeHtml(c.color)}"></span><span>${escapeHtml(c.name)}</span></span>
@@ -623,7 +698,7 @@ function renderBudget() {
         <span>Total Spent</span>
         <span>${formatMoney(totalActual)}</span>
       </div>
-      <p class="help-text">Planned total: ${formatMoney(totalPlanned)}</p>
+      <p class="help-text" id="planned-total">Planned total: ${formatMoney(totalPlanned)}</p>
     </div>
     ${renderPayPeriodSection()}
     ${renderPaychecksSection()}
@@ -645,7 +720,7 @@ function renderPaychecksSection() {
           <div class="bill-name">${escapeHtml(p.name)}</div>
           <div class="bill-meta">${formatMoney(p.amount)} • ${escapeHtml(payFrequencyLabel(p.frequency))}${next ? ` • Next payday ${formatShortDate(next)}` : ""}</div>
         </div>
-        <button class="btn btn-icon" data-action="edit-paycheck" data-id="${escapeHtml(p.id)}" aria-label="Edit paycheck">✏️</button>
+        <button class="btn btn-icon" data-action="edit-paycheck" data-id="${escapeHtml(p.id)}" aria-label="Edit ${escapeHtml(p.name)}">✏️</button>
       </div>`;
   }).join("");
   return `
@@ -705,7 +780,7 @@ function renderPayPeriodSection() {
         </div>
         ${paid
           ? `<span class="bill-paid-badge">✓ Paid ${formatMoney(paid.amount)}</span>`
-          : `<button class="btn btn-primary" data-action="mark-bill-paid" data-id="${escapeHtml(bill.id)}" data-due="${toLocalISODate(date)}">Mark Paid</button>`}
+          : `<button class="btn btn-primary" data-action="mark-bill-paid" data-id="${escapeHtml(bill.id)}" data-due="${toLocalISODate(date)}" aria-label="Mark ${escapeHtml(bill.name)} paid">Mark Paid</button>`}
       </div>`;
   }).join("");
   const allPaid = result.due.length > 0 && result.remaining === 0;
@@ -749,11 +824,11 @@ function renderBillsSection() {
         </div>
         ${paidTxn
           ? `<span class="bill-paid-badge">✓ Paid ${formatMoney(paidTxn.amount)}</span>
-             <button class="btn btn-link" data-action="undo-bill-payment" data-id="${escapeHtml(b.id)}" data-txn-id="${escapeHtml(paidTxn.id)}">Undo</button>`
+             <button class="btn btn-link" data-action="undo-bill-payment" data-id="${escapeHtml(b.id)}" data-txn-id="${escapeHtml(paidTxn.id)}" aria-label="Undo payment of ${escapeHtml(b.name)}">Undo</button>`
           : dueThisMonth
-            ? `<button class="btn btn-primary" data-action="mark-bill-paid" data-id="${escapeHtml(b.id)}" data-due="${dueHere}">Mark Paid</button>`
+            ? `<button class="btn btn-primary" data-action="mark-bill-paid" data-id="${escapeHtml(b.id)}" data-due="${dueHere}" aria-label="Mark ${escapeHtml(b.name)} paid">Mark Paid</button>`
             : `<span class="bill-next">Not due this month${nextDue ? ` — next ${formatShortDate(nextDue)}` : ""}</span>`}
-        <button class="btn btn-icon" data-action="edit-bill" data-id="${escapeHtml(b.id)}" aria-label="Edit bill">✏️</button>
+        <button class="btn btn-icon" data-action="edit-bill" data-id="${escapeHtml(b.id)}" aria-label="Edit ${escapeHtml(b.name)}">✏️</button>
       </div>`;
   }).join("");
 
@@ -792,7 +867,7 @@ function renderTransactionResults() {
         </div>
         <div class="txn-amount ${t.type === "income" ? "income" : ""}">${t.type === "income" ? "+" : "-"}${formatMoney(t.amount)}</div>
         <div class="txn-actions">
-          <button class="btn btn-icon" data-action="edit-transaction" data-id="${escapeHtml(t.id)}" aria-label="Edit transaction">✏️</button>
+          <button class="btn btn-icon" data-action="edit-transaction" data-id="${escapeHtml(t.id)}" aria-label="Edit ${escapeHtml(t.description)}">✏️</button>
         </div>
       </div>`;
   }).join("");
@@ -851,21 +926,21 @@ function renderDebts() {
         <div class="debt-stats">
           <div><strong>${formatMoney(d.currentBalance)}</strong>owed now</div>
           <div><strong>${formatMoney(d.originalBalance)}</strong>starting balance</div>
-          <div><strong>${d.interestRate || 0}%</strong>interest</div>
+          <div><strong>${escapeHtml(d.interestRate || 0)}%</strong>interest</div>
           <div><strong>${formatMoney(d.minPayment)}</strong>per month</div>
         </div>
         <p class="help-text">${est.error ? est.error : paidOff ? "Paid off — nice work." : `About ${est.months} month${est.months === 1 ? "" : "s"} left at this payment.`}</p>
         <div class="debt-actions">
-          <button class="btn btn-primary" data-action="log-payment" data-id="${escapeHtml(d.id)}">Log Payment</button>
-          <button class="btn" data-action="edit-debt" data-id="${escapeHtml(d.id)}">Edit</button>
+          <button class="btn btn-primary" data-action="log-payment" data-id="${escapeHtml(d.id)}" aria-label="Log a payment for ${escapeHtml(d.name)}">Log Payment</button>
+          <button class="btn" data-action="edit-debt" data-id="${escapeHtml(d.id)}" aria-label="Edit ${escapeHtml(d.name)}">Edit</button>
         </div>
       </div>`;
   }).join("");
 
   return `
     <div class="strategy-toggle">
-      <button class="btn ${state.debtStrategy === "snowball" ? "active" : ""}" data-action="set-strategy" data-strategy="snowball">Snowball (smallest first)</button>
-      <button class="btn ${state.debtStrategy === "avalanche" ? "active" : ""}" data-action="set-strategy" data-strategy="avalanche">Avalanche (highest interest first)</button>
+      <button class="btn ${state.debtStrategy === "snowball" ? "active" : ""}" data-action="set-strategy" data-strategy="snowball" aria-pressed="${state.debtStrategy === "snowball"}">Snowball (smallest first)</button>
+      <button class="btn ${state.debtStrategy === "avalanche" ? "active" : ""}" data-action="set-strategy" data-strategy="avalanche" aria-pressed="${state.debtStrategy === "avalanche"}">Avalanche (highest interest first)</button>
     </div>
     ${renderDebtFreeCard()}
     ${ordered.length ? cards : '<p class="empty-state">No debts added yet. Add one to start tracking payoff progress.</p>'}
@@ -883,6 +958,7 @@ function renderDebtFreeCard() {
   const extra = Number(state.extraDebtPayment) || 0;
   const withExtra = extra > 0 ? simulatePayoff(state.data.debts, state.debtStrategy, extra) : null;
   const years = (m) => (m >= 24 ? `about ${Math.round(m / 12)} years` : `${m} month${m === 1 ? "" : "s"}`);
+  const sentenceStart = (text) => text.charAt(0).toUpperCase() + text.slice(1); // "about 19 years" -> "About 19 years"
   const saving = withExtra && !withExtra.error && withExtra.months <= base.months
     ? `<p><strong>${monthsFromNowLabel(today, withExtra.months)}</strong> with an extra ${formatMoney(extra)} a month — ${base.months - withExtra.months > 0 ? `${years(base.months - withExtra.months)} sooner and ` : ""}${formatMoney(Math.max(0, base.interest - withExtra.interest))} less interest.</p>`
     : "";
@@ -890,7 +966,7 @@ function renderDebtFreeCard() {
     <div class="card">
       <h2>🎯 Debt-Free Date</h2>
       <div class="debt-free-date">${monthsFromNowLabel(today, base.months)}</div>
-      <p class="help-text">About ${years(base.months)} from now if you keep making each payment and put what a paid-off debt frees up toward the next one (${strategyName}). Interest along the way: about ${formatMoney(base.interest)}.</p>
+      <p class="help-text">${sentenceStart(years(base.months))} from now if you keep making each payment and put what a paid-off debt frees up toward the next one (${strategyName}). Interest along the way: about ${formatMoney(base.interest)}.</p>
       <div class="form-group">
         <label for="extra-debt-select">What if you paid extra each month?</label>
         <select id="extra-debt-select" data-focus-key="extra-debt">
@@ -905,8 +981,8 @@ function renderSettings() {
   const cats = state.data.categories.map((c) => `
     <div class="category-list-item">
       <span class="color-swatch" style="background:${escapeHtml(c.color)}"></span>
-      <span class="cat-name">${escapeHtml(c.name)} <span class="help-text">(${c.type})</span></span>
-      <button class="btn btn-icon" data-action="edit-category" data-id="${escapeHtml(c.id)}" aria-label="Edit category">✏️</button>
+      <span class="cat-name">${escapeHtml(c.name)} <span class="help-text">(${escapeHtml(c.type)})</span></span>
+      <button class="btn btn-icon" data-action="edit-category" data-id="${escapeHtml(c.id)}" aria-label="Edit ${escapeHtml(c.name)} category">✏️</button>
     </div>`).join("");
 
   const gh = state.githubConfig;
@@ -987,7 +1063,7 @@ function renderSettings() {
     <div class="settings-section">
       <h2>🔠 Text Size</h2>
       <div class="text-size-options">
-        ${[["normal", "Normal"], ["large", "Large"], ["xlarge", "Extra large"]].map(([v, l]) => `<button class="btn ${getTextSize() === v ? "active" : ""}" data-action="set-text-size" data-size="${v}">${l}</button>`).join("")}
+        ${[["normal", "Normal"], ["large", "Large"], ["xlarge", "Extra large"]].map(([v, l]) => `<button class="btn ${getTextSize() === v ? "active" : ""}" data-action="set-text-size" data-size="${v}" aria-pressed="${getTextSize() === v}">${l}</button>`).join("")}
       </div>
       <p class="help-text">Makes everything bigger. This applies to this device only.</p>
     </div>
@@ -1015,12 +1091,12 @@ function openTransactionModal(existing) {
     <h2>${isEdit ? "Edit" : "Add"} Transaction</h2>
     <form id="txn-form">
       <div class="type-toggle">
-        <button type="button" class="btn ${txn.type === "expense" ? "active-expense" : ""}" id="type-expense-btn">Expense</button>
-        <button type="button" class="btn ${txn.type === "income" ? "active-income" : ""}" id="type-income-btn">Income</button>
+        <button type="button" class="btn ${txn.type === "expense" ? "active-expense" : ""}" id="type-expense-btn" aria-pressed="${txn.type === "expense"}">Expense</button>
+        <button type="button" class="btn ${txn.type === "income" ? "active-income" : ""}" id="type-income-btn" aria-pressed="${txn.type === "income"}">Income</button>
       </div>
       <div class="form-group" id="txn-category-group">
         <label for="txn-category">Category</label>
-        <select id="txn-category">${categoryOptions(txn.type, txn.categoryId)}</select>
+        <select id="txn-category">${categoryOptions(txn.type, txn.categoryId, isEdit)}</select>
       </div>
       <div class="form-group">
         <label for="txn-date">Date</label>
@@ -1043,18 +1119,22 @@ function openTransactionModal(existing) {
   `);
 
   function refreshCategoryOptions() {
-    byId("txn-category-group").innerHTML = `<label for="txn-category">Category</label><select id="txn-category">${categoryOptions(currentType, txn.categoryId)}</select>`;
+    byId("txn-category-group").innerHTML = `<label for="txn-category">Category</label><select id="txn-category">${categoryOptions(currentType, txn.categoryId, isEdit && currentType === txn.type)}</select>`;
   }
   byId("type-expense-btn").addEventListener("click", () => {
     currentType = "expense";
     byId("type-expense-btn").classList.add("active-expense");
     byId("type-income-btn").classList.remove("active-income");
+    byId("type-expense-btn").setAttribute("aria-pressed", "true");
+    byId("type-income-btn").setAttribute("aria-pressed", "false");
     refreshCategoryOptions();
   });
   byId("type-income-btn").addEventListener("click", () => {
     currentType = "income";
     byId("type-income-btn").classList.add("active-income");
     byId("type-expense-btn").classList.remove("active-expense");
+    byId("type-income-btn").setAttribute("aria-pressed", "true");
+    byId("type-expense-btn").setAttribute("aria-pressed", "false");
     refreshCategoryOptions();
   });
 
@@ -1102,6 +1182,7 @@ function openCategoryModal(existing) {
     "var(--cat-food)", "var(--cat-bills)", "var(--cat-debt)", "var(--cat-transportation)",
     "var(--cat-healthcare)", "var(--cat-savings)", "var(--cat-personal)", "var(--cat-other)", "var(--cat-income)",
   ];
+  const colorNames = ["Orange", "Blue", "Red", "Sage green", "Purple", "Teal", "Gold", "Gray", "Dark green"];
 
   openModal(`
     <h2>${isEdit ? "Edit" : "Add"} Category</h2>
@@ -1120,7 +1201,7 @@ function openCategoryModal(existing) {
       <div class="form-group">
         <label>Color</label>
         <div class="swatch-picker">
-          ${colorOptions.map((c) => `<button type="button" class="color-swatch${c === cat.color ? " selected" : ""}" data-color="${c}" style="background:${c};" aria-label="Choose this color" aria-pressed="${c === cat.color}"></button>`).join("")}
+          ${colorOptions.map((c, i) => `<button type="button" class="color-swatch${c === cat.color ? " selected" : ""}" data-color="${c}" style="background:${c};" aria-label="${colorNames[i]}" aria-pressed="${c === cat.color}"></button>`).join("")}
         </div>
         <input type="hidden" id="cat-color" value="${escapeHtml(cat.color)}">
       </div>
@@ -1470,7 +1551,7 @@ function openPaycheckModal(existing) {
       </div>
       <div class="form-group">
         <label for="paycheck-category">Category</label>
-        <select id="paycheck-category">${categoryOptions("income", pay.categoryId)}</select>
+        <select id="paycheck-category">${categoryOptions("income", pay.categoryId, isEdit)}</select>
       </div>
       <p class="help-text">${isEdit ? "A new amount applies to future paychecks. Ones already in your Log stay as they are." : "Paychecks are added to your Log from today on. For earlier ones, use + Add a Transaction."}</p>
       <div class="modal-actions">
@@ -1547,8 +1628,8 @@ function openPrintBillsModal() {
     <div class="no-print">
       <h2>Print Bills List</h2>
       <div class="print-modes">
-        <button class="btn active" data-print-mode="month">All bills this month</button>
-        ${state.data.paySchedule ? '<button class="btn" data-print-mode="period">Before next payday</button>' : ""}
+        <button class="btn active" data-print-mode="month" aria-pressed="true">All bills this month</button>
+        ${state.data.paySchedule ? '<button class="btn" data-print-mode="period" aria-pressed="false">Before next payday</button>' : ""}
       </div>
     </div>
     <div id="print-sheet"></div>
@@ -1559,7 +1640,10 @@ function openPrintBillsModal() {
   `);
   document.querySelectorAll(".print-modes [data-print-mode]").forEach((btn) => {
     btn.addEventListener("click", () => {
-      document.querySelectorAll(".print-modes .btn").forEach((b) => b.classList.toggle("active", b === btn));
+      document.querySelectorAll(".print-modes .btn").forEach((b) => {
+        b.classList.toggle("active", b === btn);
+        b.setAttribute("aria-pressed", String(b === btn));
+      });
       renderPrintSheet(btn.dataset.printMode);
     });
   });
@@ -1602,7 +1686,7 @@ function openBillModal(existing) {
       </div>
       <div class="form-group">
         <label for="bill-category">Category</label>
-        <select id="bill-category">${categoryOptions("expense", bill.categoryId || "bills")}</select>
+        <select id="bill-category">${categoryOptions("expense", getCategory(bill.categoryId) ? bill.categoryId : "bills")}</select>
       </div>
       ${state.data.debts.length ? `<div class="form-group">
         <label for="bill-debt">Counts toward a debt (optional)</label>
@@ -1663,6 +1747,8 @@ function openBillModal(existing) {
       if (isEdit) {
         const idx = d.bills.findIndex((b) => b.id === bill.id);
         if (idx > -1) d.bills[idx] = updated;
+        // Same as the category dropdown in the list: payments already logged for this bill move with it.
+        if (updated.categoryId !== bill.categoryId) recategorizeBill(d, updated.id, updated.categoryId);
       } else {
         d.bills.push(updated);
       }
@@ -1823,7 +1909,7 @@ async function handleSyncNow() {
     state.data = data;
     state.sha = sha;
     setSyncStatus("ok", "Synced");
-    render();
+    renderInBackground();
     if (isDirty()) scheduleSync();
   } catch (e) {
     console.error(e);
@@ -1833,6 +1919,8 @@ async function handleSyncNow() {
 
 function handleDisconnectGithub() {
   confirmAction("Disconnect this device from GitHub? Your data stays on this device but will stop syncing.", () => {
+    clearTimeout(state.saveTimer); // no save left waiting for a connection that's gone
+    setDirty(false);
     clearGithubConfig();
     state.githubConfig = null;
     state.repoPublic = null;
@@ -1936,11 +2024,11 @@ async function init() {
     if (byId("app").classList.contains("hidden")) {
       if (isUnlockedOnThisDevice(state.data.passphraseHash)) showApp();
     } else {
-      render();
+      renderInBackground();
     }
   }
   // Paychecks that came due since the app was last open (also when offline or not connected).
-  if (addDuePaychecks() && !byId("app").classList.contains("hidden")) render();
+  if (addDuePaychecks() && !byId("app").classList.contains("hidden")) renderInBackground();
 }
 
 document.addEventListener("DOMContentLoaded", init);
