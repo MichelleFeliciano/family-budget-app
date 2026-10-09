@@ -23,16 +23,25 @@ to the public repository: the app will show a red warning if it detects that.
 ## What's inside
 
 - **Home** — this month's income, spending, what's left over, and total debt.
+  Each spending category says how it compares with last month, and **Month by
+  Month** lists the last 6 (or 12) months side by side — tap one to open it.
 - **Budget** — plan how much to spend in each category and see what you've
   actually spent. Below it:
   - **This Pay Period** — tell it when you get paid (weekly, every 2 weeks,
     twice a month, or monthly) and it lists the bills due before the next
     paycheck, what's already paid, and how much is still to pay. You can mark
     a bill paid right from there.
+  - **Regular Paychecks** — enter a paycheck once (who, how much, how often)
+    and it is added to the Log as income on every payday, on any device that
+    opens the app. Paychecks start from the day you set them up; earlier ones
+    can be added by hand. Edit a paycheck's amount any time — it applies to
+    future paydays only. Deleting a paycheck from the Log keeps it deleted.
   - **Your Bills** — each bill on its own with an amount, due day, and category
     (change the category right in the list). Check bills off with *Mark Paid*,
     sort the list by due day, name or category, and optionally link a bill to a
-    debt so paying it also lowers that debt's balance.
+    debt so paying it also lowers that debt's balance. **Print Bills List**
+    makes a large-print sheet (all bills this month, or just those due before
+    the next payday) with a box to tick off by hand — handy for the fridge.
 - **Log** — every transaction, income or expense.
 - **Debt** — each debt's balance and progress, with a "focus this one first"
   suggestion (*Snowball*: smallest first, or *Avalanche*: highest interest first).
@@ -134,8 +143,10 @@ remembered so a deleted item doesn't come back.
 
 - Run the automated checks (Node 20+, nothing to install): `node tests/run-tests.js`.
   They cover the budget and pay-period math (including evenings and daylight
-  saving), the sync merge logic, backup/restore, the offline service worker, bill
-  and debt linking, and color contrast in light and dark mode.
+  saving), regular paychecks (every frequency, no duplicates across devices),
+  the month-by-month figures, the printable list, the sync merge logic,
+  backup/restore, the offline service worker, bill and debt linking, and color
+  contrast in light and dark mode.
 - Deploying is just pushing to `master`; GitHub Pages publishes it in about a
   minute. Phones pick up the new version the next time the app is opened with a
   connection.

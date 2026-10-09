@@ -37,6 +37,7 @@ function defaultData() {
     transactions: [],
     debts: [],
     bills: [],
+    recurringIncome: [],
     budgetPlan: {},
     paySchedule: null,
     tombstones: [],
@@ -62,6 +63,7 @@ function sanitizeData(raw) {
     transactions: records(src.transactions),
     debts: records(src.debts),
     bills: records(src.bills),
+    recurringIncome: records(src.recurringIncome),
     budgetPlan: src.budgetPlan && typeof src.budgetPlan === "object" && !Array.isArray(src.budgetPlan) ? src.budgetPlan : {},
     paySchedule: src.paySchedule && typeof src.paySchedule === "object" && typeof src.paySchedule.frequency === "string" ? src.paySchedule : null,
     tombstones: Array.isArray(src.tombstones) ? src.tombstones.filter((t) => typeof t === "string") : [],
@@ -91,6 +93,7 @@ function restoreFromBackup(current, backup) {
   const keys = (d) => new Set([
     ...d.categories.map((r) => `category:${r.id}`), ...d.transactions.map((r) => `transaction:${r.id}`),
     ...d.debts.map((r) => `debt:${r.id}`), ...d.bills.map((r) => `bill:${r.id}`),
+    ...(d.recurringIncome || []).map((r) => `paycheck:${r.id}`),
   ]);
   const present = keys(backup);
   // Anything not in the backup is marked deleted, so "replace" really replaces
@@ -354,6 +357,7 @@ function mergeData(localRaw, remoteRaw) {
     transactions: mergeArraysById(loser.transactions, winner.transactions).filter((t) => !isDeleted("transaction", t.id)),
     debts: mergeArraysById(loser.debts, winner.debts).filter((d) => !isDeleted("debt", d.id)),
     bills: mergeArraysById(loser.bills, winner.bills).filter((b) => !isDeleted("bill", b.id)),
+    recurringIncome: mergeArraysById(loser.recurringIncome, winner.recurringIncome).filter((p) => !isDeleted("paycheck", p.id)),
     budgetPlan: mergeBudgetPlan(loser.budgetPlan, winner.budgetPlan),
     tombstones,
     lastUpdated: winner.lastUpdated,

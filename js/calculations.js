@@ -322,3 +322,160 @@ function tokenExpiryNotice(expiresOn, today, warnDays = 14) {
   if (daysLeft <= warnDays) return { level: "soon", daysLeft, message: `Your GitHub access token expires in ${daysLeft} day${daysLeft === 1 ? "" : "s"} (${when}). Make a new one and add it in Settings before then.` };
   return null;
 }
+
+/* ---------- Regular paychecks ----------
+   A paycheck source ({id, name, amount, categoryId, frequency, anchorDate,
+   startedOn}) is entered once; each payday it becomes an ordinary income
+   transaction. The transaction id is built from the source and the date, so
+   two devices that both add the same paycheck produce the same record and the
+   sync merge keeps just one. */
+
+const PAY_FREQUENCIES = [
+  ["weekly", "Weekly"],
+  ["biweekly", "Every 2 weeks"],
+  ["semimonthly-1-15", "Twice a month (1st & 15th)"],
+  ["semimonthly-15-last", "Twice a month (15th & last day)"],
+  ["monthly", "Monthly"],
+];
+
+function payFrequencyLabel(frequency) {
+  const hit = PAY_FREQUENCIES.find(([value]) => value === frequency);
+  return hit ? hit[1] : "";
+}
+
+function frequencyNeedsAnchor(frequency) {
+  return frequency === "weekly" || frequency === "biweekly" || frequency === "monthly";
+}
+
+/** Is this calendar day a payday on the schedule? */
+function isPayday(schedule, date) {
+  if (!schedule) return false;
+  const y = date.getFullYear();
+  const m = date.getMonth();
+  const day = date.getDate();
+  const anchor = frequencyNeedsAnchor(schedule.frequency) ? new Date(schedule.anchorDate + "T00:00:00") : null;
+  if (frequencyNeedsAnchor(schedule.frequency) && (!anchor || isNaN(anchor))) return false;
+  switch (schedule.frequency) {
+    case "weekly":
+    case "biweekly": {
+      const step = schedule.frequency === "weekly" ? 7 : 14;
+      const diff = Math.round((Date.UTC(y, m, day) - Date.UTC(anchor.getFullYear(), anchor.getMonth(), anchor.getDate())) / 86400000);
+      return ((diff % step) + step) % step === 0;
+    }
+    case "monthly": return day === clampDayOfMonth(y, m, anchor.getDate());
+    case "semimonthly-1-15": return day === 1 || day === 15;
+    case "semimonthly-15-last": return day === 15 || day === clampDayOfMonth(y, m, 31);
+    default: return false;
+  }
+}
+
+/** Every payday from fromISO to toISO, both included, as YYYY-MM-DD strings. */
+function paydaysBetween(schedule, fromISO, toISO) {
+  const out = [];
+  const from = new Date(fromISO + "T00:00:00");
+  const to = new Date(toISO + "T00:00:00");
+  if (isNaN(from) || isNaN(to)) return out;
+  let day = from;
+  for (let n = 0; day <= to && n < 800; n++, day = addDays(day, 1)) {
+    if (isPayday(schedule, day)) out.push(toLocalISODate(day));
+  }
+  return out;
+}
+
+/** The next payday on or after `from`, or null if the schedule can't be read. */
+function nextPayday(schedule, from) {
+  let day = new Date(from.getFullYear(), from.getMonth(), from.getDate());
+  for (let n = 0; n < 70; n++, day = addDays(day, 1)) {
+    if (isPayday(schedule, day)) return day;
+  }
+  return null;
+}
+
+/**
+ * Income transactions that are due but not yet in the Log: every payday from
+ * the day the paycheck was set up through today. Paychecks the user deleted
+ * (tombstoned) or already has are skipped, so deleting one sticks. Looks back
+ * at most 400 days, so a device that was off for months still catches up.
+ */
+function duePaychecks(data, today) {
+  const todayStr = toLocalISODate(today);
+  const oldest = toLocalISODate(addDays(today, -400));
+  const have = new Set(data.transactions.map((t) => t.id));
+  const deleted = new Set(data.tombstones || []);
+  const due = [];
+  (data.recurringIncome || []).forEach((src) => {
+    if (!src || !src.id || !(Number(src.amount) > 0)) return;
+    const startedOn = src.startedOn || todayStr;
+    const from = startedOn > oldest ? startedOn : oldest;
+    const cat = data.categories.find((c) => c.id === src.categoryId && c.type === "income") || data.categories.find((c) => c.type === "income");
+    paydaysBetween(src, from, todayStr).forEach((date) => {
+      const id = `pay-${src.id}-${date}`;
+      if (have.has(id) || deleted.has(`transaction:${id}`)) return;
+      have.add(id);
+      due.push({ id, type: "income", date, categoryId: cat ? cat.id : "income", description: src.name || "Paycheck", amount: roundCents(src.amount), paycheckId: src.id });
+    });
+  });
+  return due;
+}
+
+/* ---------- Month-by-month history ---------- */
+
+/** Income, spending and what's left for `count` months ending at `endMonthKey`, newest first. */
+function monthlyHistory(data, endMonthKey, count) {
+  const rows = [];
+  for (let i = 0; i < count; i++) {
+    const monthKey = shiftMonthKey(endMonthKey, -i);
+    const t = monthTotals(data, monthKey);
+    rows.push({ monthKey, income: t.income, expenses: t.expenses, leftOver: t.leftOver });
+  }
+  return rows;
+}
+
+/** "↑ $40.00 more than last month" — or null when nothing changed or there's nothing to compare. */
+function describeChange(current, previous) {
+  const diff = roundCents(current - previous);
+  if (diff === 0) return null;
+  return diff > 0 ? `↑ ${formatMoney(diff)} more than last month` : `↓ ${formatMoney(-diff)} less than last month`;
+}
+
+/* ---------- Printable bills list ---------- */
+
+function ordinal(n) {
+  const num = Number(n);
+  const v = num % 100;
+  if (v >= 11 && v <= 13) return num + "th";
+  switch (num % 10) {
+    case 1: return num + "st";
+    case 2: return num + "nd";
+    case 3: return num + "rd";
+    default: return num + "th";
+  }
+}
+
+/**
+ * What goes on the large-print sheet. mode "month": every bill in due-day
+ * order for the current month. mode "period": only the bills due before the
+ * next payday (null if no payday is set up).
+ */
+function billsSheet(data, mode, today) {
+  const short = (d) => d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  const sum = (rows) => roundCents(rows.reduce((total, r) => total + r.amount, 0));
+  if (mode === "period") {
+    const r = getBillsDueInPeriod(data.bills, data.paySchedule, today, data.transactions);
+    if (!r) return null;
+    const rows = r.due.map(({ bill, date, paid }) => ({ name: bill.name, amount: roundCents(bill.amount), due: short(date), paid: !!paid }));
+    return {
+      title: "Bills due before next payday",
+      subtitle: `${short(r.start)} – ${short(lastDayOfPeriod(r.end))} • Next payday ${short(r.end)}`,
+      rows, total: sum(rows), skipped: r.noDueDay.map((b) => b.name),
+    };
+  }
+  const monthKey = toLocalISODate(today).slice(0, 7);
+  const rows = sortBills(data.bills, "due", data.categories).map((b) => ({
+    name: b.name,
+    amount: roundCents(b.amount),
+    due: b.dueDay ? ordinal(b.dueDay) : "Any day",
+    paid: !!findBillPayment(data.transactions, b.id, monthKey),
+  }));
+  return { title: `Bills for ${formatMonthLabel(monthKey)}`, subtitle: "Due on this day of each month", rows, total: sum(rows), skipped: [] };
+}

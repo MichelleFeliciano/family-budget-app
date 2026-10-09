@@ -510,3 +510,173 @@ test("safety check: warns only when the data repository is public", async () => 
 test("bills: paid rows are not dimmed (dimmed gray text is too faint to read)", () => {
   assert.doesNotMatch(read("css/styles.css"), /is-paid[^{]*\{[^}]*opacity/);
 });
+
+/* ------------------------------------------------------------------ */
+const pays = (frequency, anchorDate) => ({ frequency, anchorDate });
+const days = (schedule, from, to) => paydaysBetween(schedule, from, to);
+
+test("paydays: every frequency lands on the right dates", () => {
+  assert.deepEqual(days(pays("weekly", "2026-10-02"), "2026-09-20", "2026-10-20"), ["2026-09-25", "2026-10-02", "2026-10-09", "2026-10-16"]);
+  assert.deepEqual(days(pays("biweekly", "2026-10-02"), "2026-09-01", "2026-10-31"), ["2026-09-04", "2026-09-18", "2026-10-02", "2026-10-16", "2026-10-30"], "dates before the anchor still line up");
+  assert.deepEqual(days(pays("biweekly", "2026-10-30"), "2026-10-01", "2026-10-20"), ["2026-10-02", "2026-10-16"], "anchor after the range");
+  assert.deepEqual(days(pays("semimonthly-1-15"), "2026-09-28", "2026-11-02"), ["2026-10-01", "2026-10-15", "2026-11-01"]);
+  assert.deepEqual(days(pays("semimonthly-15-last"), "2026-01-30", "2026-03-01"), ["2026-01-31", "2026-02-15", "2026-02-28"], "February's last day is the 28th");
+  assert.deepEqual(days(pays("semimonthly-15-last"), "2028-02-14", "2028-03-01"), ["2028-02-15", "2028-02-29"], "leap year");
+  assert.deepEqual(days(pays("monthly", "2026-01-31"), "2026-01-01", "2026-05-01"), ["2026-01-31", "2026-02-28", "2026-03-31", "2026-04-30"], "a 31st payday falls on the last day of shorter months");
+  assert.deepEqual(days(pays("monthly", "2026-10-05"), "2026-10-05", "2026-10-05"), ["2026-10-05"], "both ends are included");
+});
+
+test("paydays: daylight-saving changes and bad input don't skip or repeat a payday", () => {
+  const spring = days(pays("weekly", "2026-02-27"), "2026-02-27", "2026-04-10");
+  assert.equal(spring.length, 7);
+  assert.deepEqual(spring.slice(2, 4), ["2026-03-13", "2026-03-20"]);
+  assert.deepEqual(days(pays("biweekly", "2026-10-16"), "2026-10-16", "2026-12-01"), ["2026-10-16", "2026-10-30", "2026-11-13", "2026-11-27"]);
+  assert.deepEqual(days(pays("weekly", "garbage"), "2026-10-01", "2026-10-31"), []);
+  assert.deepEqual(days(pays("weekly", null), "2026-10-01", "2026-10-31"), []);
+  assert.deepEqual(days(pays("fortnightly", "2026-10-01"), "2026-10-01", "2026-10-31"), []);
+  assert.deepEqual(days(null, "2026-10-01", "2026-10-31"), []);
+  assert.deepEqual(days(pays("weekly", "2026-10-01"), "nope", "2026-10-31"), []);
+});
+
+test("paydays: next payday, including today", () => {
+  assert.equal(ymd(nextPayday(pays("biweekly", "2026-10-02"), at("2026-10-02"))), "2026-10-02", "today counts");
+  assert.equal(ymd(nextPayday(pays("biweekly", "2026-10-02"), at("2026-10-03"))), "2026-10-16");
+  assert.equal(ymd(nextPayday(pays("semimonthly-15-last"), at("2026-10-16"))), "2026-10-31");
+  assert.equal(nextPayday(pays("weekly", "garbage"), at("2026-10-16")), null);
+});
+
+const incomeData = (sources, over = {}) => mk({ recurringIncome: sources, ...over });
+const dad = { id: "s1", name: "Dad's paycheck", amount: 1500.5, categoryId: "income", frequency: "biweekly", anchorDate: "2026-10-02", startedOn: "2026-10-02" };
+
+test("recurring income: paychecks come due from the day they were set up, once each", () => {
+  const data = incomeData([dad]);
+  const due = duePaychecks(data, at("2026-10-31"));
+  assert.deepEqual(due.map((t) => t.date), ["2026-10-02", "2026-10-16", "2026-10-30"]);
+  assert.deepEqual(due[0], { id: "pay-s1-2026-10-02", type: "income", date: "2026-10-02", categoryId: "income", description: "Dad's paycheck", amount: 1500.5, paycheckId: "s1" });
+  assert.deepEqual(duePaychecks(data, at("2026-10-01")), [], "nothing before it starts");
+  assert.equal(duePaychecks(data, at("2026-10-02")).length, 1, "payday itself counts");
+  data.transactions.push(...due);
+  assert.deepEqual(duePaychecks(data, at("2026-10-31")), [], "running again adds nothing");
+  assert.equal(duePaychecks(data, at("2026-11-13")).length, 1, "only the new payday is added");
+});
+
+test("recurring income: a deleted paycheck stays deleted, an edited one isn't redone", () => {
+  const data = incomeData([dad], { tombstones: ["transaction:pay-s1-2026-10-16"] });
+  assert.deepEqual(duePaychecks(data, at("2026-10-31")).map((t) => t.date), ["2026-10-02", "2026-10-30"]);
+  const edited = incomeData([dad], { transactions: [{ id: "pay-s1-2026-10-02", type: "income", date: "2026-10-02", amount: 1400, description: "Dad (short week)" }] });
+  assert.deepEqual(duePaychecks(edited, at("2026-10-05")), [], "a changed amount is left alone");
+});
+
+test("recurring income: ignores damaged sources, falls back sensibly, limits the look-back", () => {
+  const data = incomeData([
+    { id: "a", name: "No amount", amount: 0, frequency: "weekly", anchorDate: "2026-10-01", startedOn: "2026-10-01" },
+    { id: "b", name: "Bad schedule", amount: 10, frequency: "weekly", anchorDate: "nope", startedOn: "2026-10-01" },
+    { name: "No id", amount: 10, frequency: "weekly", anchorDate: "2026-10-01", startedOn: "2026-10-01" },
+    { id: "c", name: "Deleted category", amount: 10, categoryId: "gone", frequency: "monthly", anchorDate: "2026-10-05", startedOn: "2026-10-05" },
+    { id: "d", name: "Expense category", amount: 10, categoryId: "food", frequency: "monthly", anchorDate: "2026-10-05", startedOn: "2026-10-05" },
+  ]);
+  const due = duePaychecks(data, at("2026-10-31"));
+  assert.deepEqual(due.map((t) => t.id), ["pay-c-2026-10-05", "pay-d-2026-10-05"]);
+  assert.deepEqual(due.map((t) => t.categoryId), ["income", "income"], "must land in an income category");
+  const forgotten = incomeData([{ id: "e", name: "Old", amount: 1, frequency: "weekly", anchorDate: "2020-01-03", startedOn: "2020-01-03" }]);
+  const long = duePaychecks(forgotten, at("2026-10-31"));
+  assert.ok(long.length >= 57 && long.length <= 58, `about 400 days of weekly pay, got ${long.length}`);
+  const noStart = incomeData([{ id: "f", name: "Hand-edited", amount: 1, frequency: "weekly", anchorDate: "2020-01-03" }]);
+  assert.equal(duePaychecks(noStart, at("2026-10-31")).length, paydaysBetween(pays("weekly", "2020-01-03"), "2026-10-31", "2026-10-31").length, "no start date means start today, never a flood");
+});
+
+test("recurring income: two devices that add the same paycheck end up with one", () => {
+  const a = incomeData([dad], { lastUpdated: "2026-10-31T10:00:00.000Z" });
+  const b = incomeData([dad], { lastUpdated: "2026-10-31T11:00:00.000Z" });
+  a.transactions.push(...duePaychecks(a, at("2026-10-31")));
+  b.transactions.push(...duePaychecks(b, at("2026-10-31")));
+  const merged = mergeData(a, b);
+  assert.equal(merged.transactions.length, 3);
+  assert.equal(new Set(merged.transactions.map((t) => t.id)).size, 3);
+  assert.equal(sumTransactions(merged.transactions, { type: "income" }), 4501.5);
+});
+
+test("recurring income: saved, merged, deleted and restored like everything else", () => {
+  assert.deepEqual(defaultData().recurringIncome, []);
+  assert.deepEqual(sanitizeData({ recurringIncome: "oops" }).recurringIncome, []);
+  assert.deepEqual(sanitizeData({ recurringIncome: [dad, 5, null] }).recurringIncome, [dad]);
+  assert.deepEqual(sanitizeData(JSON.parse('{"transactions":[],"categories":[]}')).recurringIncome, [], "files from before this feature");
+  const mom = { ...dad, id: "s2", name: "Mom's paycheck" };
+  const merged = mergeData(incomeData([dad], { lastUpdated: "2026-01-01T00:00:00.000Z" }), incomeData([mom], { lastUpdated: "2026-01-02T00:00:00.000Z" }));
+  assert.deepEqual(merged.recurringIncome.map((p) => p.id).sort(), ["s1", "s2"], "an addition on each device is kept");
+  const gone = mergeData(incomeData([dad]), incomeData([], { tombstones: ["paycheck:s1"], lastUpdated: "2026-05-01T00:00:00.000Z" }));
+  assert.deepEqual(gone.recurringIncome, [], "a deletion on one device sticks");
+  const restored = restoreFromBackup(incomeData([dad, mom]), sanitizeData({ categories: [], transactions: [], recurringIncome: [mom] }));
+  assert.ok(restored.tombstones.includes("paycheck:s1"), "restoring replaces: paychecks missing from the backup are removed");
+  assert.ok(!restored.tombstones.includes("paycheck:s2"));
+  assert.equal(mergeData(restored, incomeData([dad, mom])).recurringIncome.map((p) => p.id).join(), "s2");
+});
+
+test("month by month: newest first, across a year boundary, with gaps", () => {
+  const data = mk({ transactions: [
+    { id: "1", type: "income", date: "2026-01-05", amount: 3000 }, { id: "2", type: "expense", date: "2026-01-20", amount: 1200.1 },
+    { id: "3", type: "expense", date: "2025-11-02", amount: 50 }, { id: "4", type: "income", date: "2025-11-02", amount: 10 },
+  ] });
+  const rows = monthlyHistory(data, "2026-02", 4);
+  assert.deepEqual(rows.map((r) => r.monthKey), ["2026-02", "2026-01", "2025-12", "2025-11"]);
+  assert.deepEqual(rows.map((r) => r.income), [0, 3000, 0, 10]);
+  assert.deepEqual(rows.map((r) => r.expenses), [0, 1200.1, 0, 50]);
+  assert.deepEqual(rows.map((r) => r.leftOver), [0, 1799.9, 0, -40]);
+  assert.equal(monthlyHistory(data, "2026-02", 12).length, 12);
+});
+
+test("month by month: change from last month is worded plainly", () => {
+  assert.equal(describeChange(150, 100), "↑ $50.00 more than last month");
+  assert.equal(describeChange(100.5, 150), "↓ $49.50 less than last month");
+  assert.equal(describeChange(100, 100), null);
+  assert.equal(describeChange(0.3, 0.1 + 0.2), null, "float dust is not a change");
+  assert.equal(describeChange(40, 0), "↑ $40.00 more than last month");
+});
+
+test("printable bills list: month view is in due-day order and shows what's paid", () => {
+  const data = mk({
+    bills: [
+      { id: "1", name: "Water", amount: 45.25, dueDay: 22 }, { id: "2", name: "Rent", amount: 1000, dueDay: 1 },
+      { id: "3", name: "Netflix", amount: 15.49 }, { id: "4", name: "Phone", amount: 80, dueDay: 3 },
+    ],
+    transactions: [{ id: "t", billId: "2", date: "2026-10-01" }, { id: "u", billId: "4", date: "2026-09-03" }],
+  });
+  const sheet = billsSheet(data, "month", at("2026-10-08"));
+  assert.equal(sheet.title, "Bills for October 2026");
+  assert.deepEqual(sheet.rows.map((r) => [r.due, r.name, r.paid]), [["1st", "Rent", true], ["3rd", "Phone", false], ["22nd", "Water", false], ["Any day", "Netflix", false]]);
+  assert.equal(sheet.total, 1140.74);
+  assert.equal(billsSheet(data, "period", at("2026-10-08")), null, "no payday set up yet");
+  assert.equal(billsSheet(mk(), "month", at("2026-10-08")).rows.length, 0);
+});
+
+test("printable bills list: pay-period view lists only what's due before the next payday", () => {
+  const data = mk({
+    paySchedule: pays("weekly", "2026-10-02"),
+    bills: [{ id: "1", name: "Water", amount: 45.25, dueDay: 10 }, { id: "2", name: "Rent", amount: 1000, dueDay: 1 }, { id: "3", name: "Netflix", amount: 15 }],
+    transactions: [{ id: "t", billId: "1", date: "2026-10-05" }],
+  });
+  const quiet = billsSheet(data, "period", at("2026-10-08")); // pay period Oct 2 - Oct 8: nothing falls due
+  assert.equal(quiet.subtitle, "Oct 2 – Oct 8 • Next payday Oct 9");
+  assert.deepEqual(quiet.rows, []);
+  const later = billsSheet(data, "period", at("2026-10-10")); // pay period Oct 9 - Oct 15
+  assert.deepEqual(later.rows.map((r) => [r.due, r.name, r.paid]), [["Oct 10", "Water", true]]);
+  assert.equal(later.total, 45.25);
+  assert.deepEqual(later.skipped, ["Netflix"], "bills with no due date are mentioned, not silently dropped");
+});
+
+test("printable bills list: print layout hides the app and uses large, dark-on-white type", () => {
+  const css = read("css/styles.css");
+  const print = css.slice(css.indexOf("@media print"));
+  assert.match(print, /body\s*>\s*\*:not\(#modal-root\)\s*\{[^}]*display:\s*none/);
+  assert.match(print, /\.no-print\s*\{[^}]*display:\s*none/);
+  assert.match(print, /table\s*\{[^}]*font-size:\s*(2\d|3\d)pt/);
+  assert.match(css, /\.print-sheet\s*\{[^}]*background:\s*#ffffff;\s*color:\s*#000000/, "stays black on white even in dark mode");
+});
+
+test("app wiring: new screens are hooked up and ordinal() lives in one place", () => {
+  const app = read("js/app.js");
+  for (const needle of ["open-add-paycheck", "edit-paycheck", "open-month", "toggle-history", "print-bills", "addDuePaychecks()", "renderPaychecksSection()", "renderHistoryCard()"])
+    assert.ok(app.includes(needle), `app.js is missing ${needle}`);
+  assert.equal((app.match(/function ordinal\(/g) || []).length, 0, "ordinal() now lives in calculations.js");
+  assert.equal((read("js/calculations.js").match(/function ordinal\(/g) || []).length, 1);
+});

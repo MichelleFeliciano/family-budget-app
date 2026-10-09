@@ -13,6 +13,7 @@ const state = {
   saveTimer: null,
   editSeq: 0,
   billSort: getBillSort(),
+  historyMonths: 6,
   repoPublic: null, // true when the GitHub repository holding the budget is public
 };
 
@@ -135,6 +136,7 @@ async function pullAndMergeSilently() {
     state.data = data;
     state.sha = sha;
     setSyncStatus("ok", "Synced");
+    addDuePaychecks(); // after merging, so this device never invents a paycheck another one already removed
     if (!byId("app").classList.contains("hidden")) render();
     if (isDirty()) scheduleSync(); // changes from an earlier session or a failed save
   } catch (e) {
@@ -245,7 +247,8 @@ function wireApp() {
   window.addEventListener("online", pullAndMergeSilently);
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible" && !byId("app").classList.contains("hidden")) {
-      pullAndMergeSilently();
+      if (state.githubConfig) pullAndMergeSilently();
+      else if (addDuePaychecks()) render(); // the app stayed open past midnight
     }
   });
 }
@@ -264,6 +267,11 @@ function handleViewClick(e) {
     case "edit-debt": openDebtModal(state.data.debts.find((d) => d.id === btn.dataset.id)); break;
     case "log-payment": openLogPaymentModal(state.data.debts.find((d) => d.id === btn.dataset.id)); break;
     case "open-pay-schedule": openPayScheduleModal(); break;
+    case "open-add-paycheck": openPaycheckModal(null); break;
+    case "edit-paycheck": openPaycheckModal(state.data.recurringIncome.find((p) => p.id === btn.dataset.id)); break;
+    case "open-month": state.month = btn.dataset.month; render(); window.scrollTo(0, 0); break;
+    case "toggle-history": state.historyMonths = state.historyMonths === 6 ? 12 : 6; render(); break;
+    case "print-bills": openPrintBillsModal(); break;
     case "open-add-bill": openBillModal(null); break;
     case "edit-bill": openBillModal(state.data.bills.find((b) => b.id === btn.dataset.id)); break;
     case "mark-bill-paid": openMarkBillPaidModal(state.data.bills.find((b) => b.id === btn.dataset.id), btn.dataset.due); break;
@@ -385,14 +393,19 @@ function renderDashboard() {
   const cats = state.data.categories.filter((c) => c.type === "expense");
   const amounts = cats.map((c) => sumTransactions(state.data.transactions, { monthKey: state.month, categoryId: c.id, type: "expense" }));
   const maxCat = Math.max(1, ...amounts);
+  // Only compare with last month once there is something to compare with.
+  const prevKey = shiftMonthKey(state.month, -1);
+  const hasPrev = sumTransactions(state.data.transactions, { monthKey: prevKey, type: "expense" }) > 0;
 
   const bars = cats.map((c, i) => {
     const amt = amounts[i];
     const pct = Math.round((amt / maxCat) * 100);
+    const change = hasPrev ? describeChange(amt, sumTransactions(state.data.transactions, { monthKey: prevKey, categoryId: c.id, type: "expense" })) : null;
     return `<div class="bar-row">
       <div class="bar-label">${escapeHtml(c.name)}</div>
       <div class="bar-track"><div class="bar-fill" style="width:${pct}%; background:${c.color};"></div></div>
       <div class="bar-amount">${formatMoney(amt)}</div>
+      ${change ? `<div class="bar-change">${change}</div>` : ""}
     </div>`;
   }).join("");
 
@@ -414,8 +427,36 @@ function renderDashboard() {
       <h2>Spending by Category</h2>
       ${anySpending ? bars : '<p class="empty-state">No expenses logged yet this month.</p>'}
     </div>
+    ${renderHistoryCard()}
     <button class="btn btn-primary btn-large" data-action="open-add-transaction">+ Add a Transaction</button>
   `;
+}
+
+// Income, spending and what was left for each recent month, newest first.
+// Tapping a month opens it.
+function renderHistoryCard() {
+  const all = monthlyHistory(state.data, currentMonthKey(), 12);
+  const hasData = (r) => r.income > 0 || r.expenses > 0;
+  // Leave out the empty months from before anything was logged.
+  const oldest = all.map(hasData).lastIndexOf(true);
+  if (oldest === -1) return "";
+  const logged = all.slice(0, oldest + 1);
+  const rows = logged.slice(0, state.historyMonths);
+  const maxSpent = Math.max(1, ...rows.map((r) => r.expenses));
+  const lines = rows.map((r) => `
+    <button class="history-row${r.monthKey === state.month ? " selected" : ""}" data-action="open-month" data-month="${r.monthKey}" aria-label="Open ${formatMonthLabel(r.monthKey)}">
+      <span class="history-month">${formatMonthLabel(r.monthKey)}</span>
+      <span class="history-spent">Spent ${formatMoney(r.expenses)}</span>
+      <span class="history-bar"><span style="width:${Math.round((r.expenses / maxSpent) * 100)}%"></span></span>
+      <span class="history-detail">Income ${formatMoney(r.income)} • ${r.leftOver >= 0 ? "Left over" : "Short by"} <strong class="${r.leftOver >= 0 ? "positive" : "negative"}">${formatMoney(Math.abs(r.leftOver))}</strong></span>
+    </button>`).join("");
+  return `
+    <div class="card">
+      <h2>📅 Month by Month</h2>
+      <p class="help-text">Tap a month to open it.</p>
+      ${lines}
+      ${logged.length > 6 ? `<button class="btn btn-link" data-action="toggle-history">${state.historyMonths === 6 ? "Show 12 months" : "Show 6 months"}</button>` : ""}
+    </div>`;
 }
 
 function renderBudget() {
@@ -458,12 +499,35 @@ function renderBudget() {
       <p class="help-text">Planned total: ${formatMoney(totalPlanned)}</p>
     </div>
     ${renderPayPeriodSection()}
+    ${renderPaychecksSection()}
     ${renderBillsSection()}
   `;
 }
 
 function formatShortDate(date) {
   return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+function renderPaychecksSection() {
+  const sources = state.data.recurringIncome;
+  const rows = sources.map((p) => {
+    const next = nextPayday(p, new Date());
+    return `
+      <div class="bill-item">
+        <div class="bill-main">
+          <div class="bill-name">${escapeHtml(p.name)}</div>
+          <div class="bill-meta">${formatMoney(p.amount)} • ${escapeHtml(payFrequencyLabel(p.frequency))}${next ? ` • Next payday ${formatShortDate(next)}` : ""}</div>
+        </div>
+        <button class="btn btn-icon" data-action="edit-paycheck" data-id="${p.id}" aria-label="Edit paycheck">✏️</button>
+      </div>`;
+  }).join("");
+  return `
+    <div class="card">
+      <h2>💵 Regular Paychecks</h2>
+      <p class="help-text">Add a paycheck once and it is put in your Log as income on every payday.</p>
+      ${sources.length ? rows : ""}
+      <button class="btn btn-primary btn-large" style="margin-top:12px;" data-action="open-add-paycheck">+ Add a Paycheck</button>
+    </div>`;
 }
 
 function renderPayPeriodSection() {
@@ -518,18 +582,6 @@ function renderPayPeriodSection() {
     </div>`;
 }
 
-function ordinal(n) {
-  const num = Number(n);
-  const v = num % 100;
-  if (v >= 11 && v <= 13) return num + "th";
-  switch (num % 10) {
-    case 1: return num + "st";
-    case 2: return num + "nd";
-    case 3: return num + "rd";
-    default: return num + "th";
-  }
-}
-
 function renderBillsSection() {
   const bills = sortBills(state.data.bills, state.billSort, state.data.categories);
 
@@ -565,6 +617,7 @@ function renderBillsSection() {
         </select></div>` : ""}
       ${bills.length ? rows : '<p class="empty-state">No bills added yet.</p>'}
       <button class="btn btn-primary btn-large" style="margin-top:12px;" data-action="open-add-bill">+ Add a Bill</button>
+      ${bills.length ? '<button class="btn btn-large" style="margin-top:10px;" data-action="print-bills">🖨️ Print Bills List</button>' : ""}
     </div>
   `;
 }
@@ -1029,20 +1082,14 @@ function openLogPaymentModal(debt) {
 
 function openPayScheduleModal() {
   const ps = state.data.paySchedule || { frequency: "biweekly", anchorDate: todayISO() };
-  const needsAnchor = (freq) => freq === "weekly" || freq === "biweekly" || freq === "monthly";
+  const needsAnchor = frequencyNeedsAnchor;
 
   openModal(`
     <h2>When do you get paid?</h2>
     <form id="pay-schedule-form">
       <div class="form-group">
         <label for="pay-frequency">How often?</label>
-        <select id="pay-frequency">
-          <option value="weekly" ${ps.frequency === "weekly" ? "selected" : ""}>Weekly</option>
-          <option value="biweekly" ${ps.frequency === "biweekly" ? "selected" : ""}>Every 2 weeks</option>
-          <option value="semimonthly-1-15" ${ps.frequency === "semimonthly-1-15" ? "selected" : ""}>Twice a month (1st &amp; 15th)</option>
-          <option value="semimonthly-15-last" ${ps.frequency === "semimonthly-15-last" ? "selected" : ""}>Twice a month (15th &amp; last day)</option>
-          <option value="monthly" ${ps.frequency === "monthly" ? "selected" : ""}>Monthly</option>
-        </select>
+        <select id="pay-frequency">${frequencyOptions(ps.frequency)}</select>
       </div>
       <div class="form-group" id="pay-anchor-group" style="${needsAnchor(ps.frequency) ? "" : "display:none;"}">
         <label for="pay-anchor-date">A recent payday</label>
@@ -1072,6 +1119,152 @@ function openPayScheduleModal() {
     closeModal();
     showToast("Payday settings saved");
   });
+}
+
+function frequencyOptions(selected) {
+  return PAY_FREQUENCIES.map(([value, label]) => `<option value="${value}" ${value === selected ? "selected" : ""}>${escapeHtml(label)}</option>`).join("");
+}
+
+function openPaycheckModal(existing) {
+  const isEdit = !!existing;
+  const pay = existing || { name: "", amount: "", categoryId: "income", frequency: "biweekly", anchorDate: todayISO() };
+
+  openModal(`
+    <h2>${isEdit ? "Edit" : "Add"} Paycheck</h2>
+    <form id="paycheck-form">
+      <div class="form-group">
+        <label for="paycheck-name">Whose paycheck?</label>
+        <input type="text" id="paycheck-name" value="${escapeHtml(pay.name)}" placeholder="e.g. Dad's paycheck" required>
+      </div>
+      <div class="form-group">
+        <label for="paycheck-amount">Amount each payday</label>
+        <input type="number" id="paycheck-amount" min="0.01" step="0.01" value="${pay.amount}" placeholder="0.00" required>
+      </div>
+      <div class="form-group">
+        <label for="paycheck-frequency">How often?</label>
+        <select id="paycheck-frequency">${frequencyOptions(pay.frequency)}</select>
+      </div>
+      <div class="form-group" id="paycheck-anchor-group" style="${frequencyNeedsAnchor(pay.frequency) ? "" : "display:none;"}">
+        <label for="paycheck-anchor">Any one payday</label>
+        <input type="date" id="paycheck-anchor" value="${pay.anchorDate || todayISO()}">
+        <p class="help-text">A past or coming payday — we use it to line up the schedule.</p>
+      </div>
+      <div class="form-group">
+        <label for="paycheck-category">Category</label>
+        <select id="paycheck-category">${categoryOptions("income", pay.categoryId)}</select>
+      </div>
+      <p class="help-text">${isEdit ? "A new amount applies to future paychecks. Ones already in your Log stay as they are." : "Paychecks are added to your Log from today on. For earlier ones, use + Add a Transaction."}</p>
+      <div class="modal-actions">
+        <button type="button" class="btn" data-action="modal-cancel">Cancel</button>
+        <button type="submit" class="btn btn-primary">${isEdit ? "Save" : "Add"}</button>
+      </div>
+      ${isEdit ? '<button type="button" class="btn btn-danger btn-large" style="margin-top:10px;" id="paycheck-delete-btn">Delete Paycheck</button>' : ""}
+    </form>
+  `);
+
+  byId("paycheck-frequency").addEventListener("change", () => {
+    byId("paycheck-anchor-group").style.display = frequencyNeedsAnchor(byId("paycheck-frequency").value) ? "" : "none";
+  });
+
+  byId("paycheck-form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const frequency = byId("paycheck-frequency").value;
+    const anchorDate = frequencyNeedsAnchor(frequency) ? byId("paycheck-anchor").value : null;
+    if (frequencyNeedsAnchor(frequency) && !anchorDate) {
+      showToast("Pick a payday date first.");
+      return;
+    }
+    const scheduleChanged = !isEdit || pay.frequency !== frequency || (pay.anchorDate || null) !== anchorDate;
+    const updated = {
+      id: isEdit ? pay.id : uid(),
+      name: byId("paycheck-name").value.trim(),
+      amount: Math.abs(Number(byId("paycheck-amount").value) || 0),
+      categoryId: byId("paycheck-category").value || "income",
+      frequency,
+      anchorDate,
+      // A new schedule starts fresh today, so it can't invent paychecks on dates the old schedule skipped.
+      startedOn: scheduleChanged ? todayISO() : pay.startedOn || todayISO(),
+    };
+    if (!(updated.amount > 0)) { showToast("Enter the paycheck amount."); return; }
+    mutateData((d) => {
+      if (isEdit) {
+        const idx = d.recurringIncome.findIndex((p) => p.id === pay.id);
+        if (idx > -1) d.recurringIncome[idx] = updated;
+      } else {
+        d.recurringIncome.push(updated);
+      }
+    }, { render: false });
+    const added = addDuePaychecks();
+    closeModal();
+    render();
+    showToast(added ? `${isEdit ? "Paycheck updated" : "Paycheck added"} — today's pay is in your Log` : isEdit ? "Paycheck updated" : "Paycheck added");
+  });
+
+  if (isEdit) {
+    byId("paycheck-delete-btn").addEventListener("click", () => {
+      confirmAction(`Delete "${pay.name}"? Paychecks already in your Log stay there.`, () => {
+        mutateData((d) => {
+          d.recurringIncome = d.recurringIncome.filter((p) => p.id !== pay.id);
+          d.tombstones.push(`paycheck:${pay.id}`);
+        });
+        closeModal();
+        showToast("Paycheck deleted");
+      });
+    });
+  }
+}
+
+// Puts any paychecks that have come due into the Log. Returns how many were added.
+function addDuePaychecks() {
+  const due = duePaychecks(state.data, new Date());
+  if (!due.length) return 0;
+  mutateData((d) => { d.transactions.push(...due); }, { render: false });
+  return due.length;
+}
+
+/* ---------- Large-print bills list ---------- */
+
+function openPrintBillsModal() {
+  openModal(`
+    <div class="no-print">
+      <h2>Print Bills List</h2>
+      <div class="print-modes">
+        <button class="btn active" data-print-mode="month">All bills this month</button>
+        ${state.data.paySchedule ? '<button class="btn" data-print-mode="period">Before next payday</button>' : ""}
+      </div>
+    </div>
+    <div id="print-sheet"></div>
+    <div class="modal-actions no-print">
+      <button type="button" class="btn" data-action="modal-cancel">Close</button>
+      <button type="button" class="btn btn-primary" id="print-now-btn">🖨️ Print</button>
+    </div>
+  `);
+  document.querySelectorAll(".print-modes [data-print-mode]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll(".print-modes .btn").forEach((b) => b.classList.toggle("active", b === btn));
+      renderPrintSheet(btn.dataset.printMode);
+    });
+  });
+  byId("print-now-btn").addEventListener("click", () => window.print());
+  renderPrintSheet("month");
+}
+
+function renderPrintSheet(mode) {
+  const sheet = billsSheet(state.data, mode, new Date());
+  const el = byId("print-sheet");
+  if (!el) return;
+  if (!sheet) { el.innerHTML = '<p class="help-text">Set up your payday first.</p>'; return; }
+  el.innerHTML = `
+    <div class="print-sheet">
+      <h2>${escapeHtml(sheet.title)}</h2>
+      <p class="print-sub">${escapeHtml(sheet.subtitle)}</p>
+      ${sheet.rows.length ? `<table>
+        <thead><tr><th>Due</th><th>Bill</th><th class="num">Amount</th><th>Paid</th></tr></thead>
+        <tbody>${sheet.rows.map((r) => `<tr><td>${escapeHtml(r.due)}</td><td>${escapeHtml(r.name)}</td><td class="num">${formatMoney(r.amount)}</td><td class="paid-box">${r.paid ? "✓" : ""}</td></tr>`).join("")}</tbody>
+        <tfoot><tr><td></td><td>Total</td><td class="num">${formatMoney(sheet.total)}</td><td></td></tr></tfoot>
+      </table>` : '<p>No bills with a due date fall in this pay period.</p>'}
+      ${sheet.skipped.length ? `<p class="print-sub">Not shown (no due date): ${sheet.skipped.map(escapeHtml).join(", ")}</p>` : ""}
+    </div>`;
 }
 
 function openBillModal(existing) {
@@ -1384,6 +1577,8 @@ async function init() {
       render();
     }
   }
+  // Paychecks that came due since the app was last open (also when offline or not connected).
+  if (addDuePaychecks() && !byId("app").classList.contains("hidden")) render();
 }
 
 document.addEventListener("DOMContentLoaded", init);
