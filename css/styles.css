@@ -64,7 +64,7 @@
 ::placeholder { color: var(--color-text-muted); opacity: 1; }
 :focus-visible { outline: 3px solid var(--color-primary); outline-offset: 2px; }
 
-html { font-size: 18px; }
+html { font-size: 18px; -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 html[data-text-size="large"] { font-size: 21px; }
 html[data-text-size="xlarge"] { font-size: 24px; }
 
@@ -76,7 +76,14 @@ html, body {
   font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   line-height: 1.5;
 }
-body { font-size: 1rem; }
+body {
+  font-size: 1rem;
+  /* A long unbroken word (a pasted web address, a very long name) wraps instead of
+     stretching the page, which on a phone would zoom the whole app out sideways. */
+  overflow-wrap: anywhere;
+}
+/* ...but buttons and badges keep their words whole. */
+.btn, button, .tab, .bill-paid-badge, .focus-badge, .toast-btn { overflow-wrap: normal; }
 
 h1, h2, h3 { line-height: 1.25; margin: 0 0 0.5em; }
 h1 { font-size: 1.6rem; }
@@ -88,6 +95,7 @@ button {
   font: inherit;
   cursor: pointer;
 }
+button, select, input, label, summary { touch-action: manipulation; }
 
 input, select, textarea {
   font: inherit;
@@ -290,6 +298,7 @@ main#view-container {
 
 /* ---------- Month by month ---------- */
 .history-row {
+  overflow-wrap: anywhere;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 2px 12px;
@@ -379,13 +388,14 @@ main#view-container {
 /* ---------- Transactions ---------- */
 .txn-item {
   display: flex;
+  flex-wrap: wrap; /* a very long amount drops to its own line instead of squeezing the description to nothing */
   align-items: center;
   gap: 12px;
   padding: 12px 0;
   border-bottom: 1px solid var(--color-border);
 }
 .txn-item:last-child { border-bottom: none; }
-.txn-main { flex: 1; min-width: 0; }
+.txn-main { flex: 1 1 8rem; min-width: 0; }
 .txn-desc { font-weight: 600; }
 .txn-meta { color: var(--color-text-muted); font-size: 0.9rem; }
 .txn-amount { font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
@@ -435,10 +445,12 @@ main#view-container {
 .text-size-options { display: flex; gap: 8px; flex-wrap: wrap; }
 .text-size-options .btn { flex: 1 1 0; }
 .text-size-options .btn.active { background: var(--color-primary); color: var(--color-on-primary); border-color: var(--color-primary); }
-.period-summary { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; flex-wrap: wrap; }
-.bill-cat { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+.bill-cat { display: flex; align-items: center; gap: 8px; margin-top: 6px; min-width: 0; }
 .bill-cat-select {
   min-height: 40px;
+  min-width: 0;
+  flex: 0 1 auto;
+  text-overflow: ellipsis;
   max-width: 100%;
   padding: 4px 8px;
   font-size: 0.9rem;
@@ -485,11 +497,12 @@ main#view-container {
   overflow: hidden;
   margin: 10px 0;
 }
-.debt-progress-fill { height: 100%; background: var(--color-debt, var(--cat-debt)); border-radius: 8px; }
+.debt-progress-fill { height: 100%; background: var(--cat-debt); border-radius: 8px; }
 .debt-stats { display: flex; flex-wrap: wrap; gap: 16px; color: var(--color-text-muted); font-size: 0.95rem; margin-bottom: 12px; }
 .debt-stats strong { color: var(--color-text); display: block; font-size: 1.05rem; }
 .debt-actions { display: flex; gap: 8px; flex-wrap: wrap; }
-.strategy-toggle { display: flex; gap: 8px; margin-bottom: 16px; }
+.strategy-toggle { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+.strategy-toggle .btn { flex: 1 1 9rem; min-width: 0; padding-left: 12px; padding-right: 12px; }
 .strategy-toggle .btn.active { background: var(--color-primary); color: var(--color-on-primary); border-color: var(--color-primary); }
 
 /* ---------- Forms / modals ---------- */
@@ -512,7 +525,9 @@ main#view-container {
   width: 100%;
   max-width: 480px;
   max-height: 90vh;
+  max-height: 90dvh;
   overflow-y: auto;
+  overscroll-behavior: contain;
 }
 @media (min-width: 600px) {
   .modal { border-radius: var(--radius); }
@@ -534,8 +549,8 @@ main#view-container {
 .form-row .form-group { flex: 1; }
 .modal-actions { display: flex; gap: 10px; margin-top: 20px; }
 .modal-actions .btn { flex: 1; }
-.type-toggle { display: flex; gap: 8px; margin-bottom: 16px; }
-.type-toggle .btn { flex: 1; }
+.type-toggle { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+.type-toggle .btn { flex: 1 1 6rem; min-width: 0; padding-left: 12px; padding-right: 12px; }
 .type-toggle .btn.active-income { background: var(--color-primary-tint); border-color: var(--color-primary); color: var(--color-primary-dark); }
 .type-toggle .btn.active-expense { background: var(--color-danger-tint); border-color: var(--color-danger); color: var(--color-danger); }
 
@@ -637,7 +652,7 @@ main#view-container {
 .print-modes { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
 .print-modes .btn { flex: 1 1 0; }
 .print-modes .btn.active { background: var(--color-primary); color: var(--color-on-primary); border-color: var(--color-primary); }
-.print-sheet { background: #ffffff; color: #000000; padding: 16px; border: 1px solid var(--color-border); border-radius: var(--radius-sm); }
+.print-sheet { overflow-x: auto; background: #ffffff; color: #000000; padding: 16px; border: 1px solid var(--color-border); border-radius: var(--radius-sm); }
 .print-sheet h2 { font-size: 1.5rem; margin-bottom: 0.2em; }
 .print-sheet .print-sub { color: #333333; font-size: 1rem; }
 .print-sheet table { width: 100%; border-collapse: collapse; font-size: 1.05rem; }
@@ -648,6 +663,16 @@ main#view-container {
 .print-sheet th, .print-sheet td:first-child, .print-sheet td.num, .print-sheet td.paid-box { white-space: nowrap; }
 .print-sheet td.paid-box { width: 2.2em; text-align: center; font-weight: 700; border-left: 1px solid #888888; }
 .print-sheet tfoot td { font-weight: 700; border-top: 3px solid #000000; border-bottom: none; }
+
+/* ---------- User preferences ---------- */
+@media (prefers-reduced-motion: reduce) {
+  .btn { transition: none; }
+  .btn:active { transform: none; }
+}
+@media (forced-colors: active) {
+  .bar-fill, .debt-progress-fill, .goal-fill, .history-bar span, .cat-dot, .color-swatch { forced-color-adjust: none; }
+  .btn { border: 2px solid ButtonText; }
+}
 
 /* ---------- Small screens (kept last so they override the rules above) ---------- */
 @media (max-width: 520px) {
@@ -683,7 +708,7 @@ main#view-container {
   .no-print { display: none !important; }
   .modal-backdrop { position: static; background: none; display: block; }
   .modal { max-width: none; max-height: none; overflow: visible; padding: 0; border-radius: 0; background: #ffffff; }
-  .print-sheet { border: none; padding: 0; }
+  .print-sheet { border: none; padding: 0; overflow: visible; }
   .print-sheet h2 { font-size: 30pt; }
   .print-sheet .print-sub { font-size: 16pt; }
   .print-sheet table { font-size: 22pt; }

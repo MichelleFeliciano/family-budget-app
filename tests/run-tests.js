@@ -1248,3 +1248,80 @@ test("GitHub: a data file over 1 MB (content left out by GitHub) is read from th
   globalThis.fetch = async (url, init) => init.headers.Accept.includes("raw") ? { ok: false, status: 403, text: async () => "" } : { ok: true, status: 200, json: async () => ({ content: "", encoding: "none", sha: "x" }) };
   await assert.rejects(() => githubFetchFile(cfg), (e) => e.status === 403, "a failed raw read is reported like any other read failure");
 });
+
+/* ------------------------------------------------------------------ */
+test("css: every variable used is defined, and every variable defined is used", () => {
+  const css = read("css/styles.css").replace(/\/\*[\s\S]*?\*\//g, "");
+  const defined = new Set([...css.matchAll(/(--[\w-]+)\s*:/g)].map((m) => m[1]));
+  const sources = [css, read("js/app.js"), read("js/calculations.js"), read("js/storage.js"), read("index.html")].join("\n");
+  const used = new Set([...sources.matchAll(/var\((--[\w-]+)/g)].map((m) => m[1]));
+  assert.deepEqual([...used].filter((v) => !defined.has(v)), [], "used but never defined");
+  assert.deepEqual([...defined].filter((v) => !used.has(v)), [], "defined but never used");
+});
+
+// Like cssRules, but remembers which @media block each rule sits in.
+function cssRulesInContext(css) {
+  const src = css.replace(/\/\*[\s\S]*?\*\//g, "");
+  const out = []; let i = 0;
+  (function block(ctx) {
+    while (i < src.length) {
+      while (/\s/.test(src[i])) i++;
+      if (i >= src.length || src[i] === "}") { i++; return; }
+      const start = i; while (src[i] !== "{" && i < src.length) i++;
+      const head = src.slice(start, i).trim(); i++;
+      if (head.startsWith("@media")) { block(head); continue; }
+      if (head.startsWith("@page")) { let d = 1; while (d) { if (src[i] === "{") d++; if (src[i] === "}") d--; i++; } continue; }
+      const b = i; while (src[i] !== "}") i++;
+      out.push({ selector: head.replace(/\s+/g, " "), body: src.slice(b, i), ctx }); i++;
+    }
+  })("");
+  return out;
+}
+
+test("css: no rule sets the same property twice, and no selector is declared twice with the same property", () => {
+  const seen = new Map(); const problems = [];
+  for (const { selector, body, ctx } of cssRulesInContext(read("css/styles.css"))) {
+    const props = body.split(";").map((d) => d.split(":")[0].trim()).filter(Boolean);
+    // `max-height: 90vh; max-height: 90dvh;` is deliberate: the second line is used where it's understood.
+    const fallback = (p) => body.split(";").filter((d) => d.split(":")[0].trim() === p).some((d) => /dvh/.test(d));
+    props.filter((p, i) => props.indexOf(p) !== i && !fallback(p)).forEach((p) => problems.push(`${selector}: ${p} twice in one rule`));
+    const key = ctx + "|" + selector;
+    const prev = seen.get(key) || [];
+    props.filter((p) => prev.includes(p)).forEach((p) => problems.push(`${selector}${ctx ? " in " + ctx : ""}: ${p} set in two rules`));
+    seen.set(key, [...prev, ...props]);
+  }
+  assert.deepEqual(problems, []);
+});
+
+test("css: hard-coded colours stay out of the themed app (only the print sheet, the dim backdrop and the swatch edge)", () => {
+  const offenders = [];
+  for (const { selector, body, ctx } of cssRulesInContext(read("css/styles.css"))) {
+    if (selector === ":root" || ctx === "@media print") continue;
+    if (/^(\.print-sheet\b|\.modal-backdrop$|\.color-swatch$)/.test(selector)) continue;
+    if (/#[0-9a-fA-F]{3,8}\b|rgba?\(|(?<![\w-])(white|black)(?![\w-])/.test(body)) offenders.push(selector);
+  }
+  assert.deepEqual(offenders, [], "these would look wrong in dark mode");
+});
+
+test("css: long words wrap instead of stretching the page, but buttons keep their words whole", () => {
+  const css = read("css/styles.css");
+  assert.match(css, /body\s*\{[^}]*overflow-wrap:\s*anywhere/);
+  assert.match(css, /\.btn,\s*button,\s*\.tab[^{]*\{\s*overflow-wrap:\s*normal/);
+  assert.match(css, /\.txn-item\s*\{[^}]*flex-wrap:\s*wrap/, "a long amount drops to its own line");
+  assert.match(css, /\.strategy-toggle\s*\{[^}]*flex-wrap:\s*wrap/);
+  assert.match(css, /\.type-toggle\s*\{[^}]*flex-wrap:\s*wrap/);
+  assert.match(css, /\.print-sheet\s*\{[^}]*overflow-x:\s*auto/, "an over-wide print preview scrolls inside itself");
+  assert.match(css.slice(css.indexOf("@media print")), /\.print-sheet\s*\{[^}]*overflow:\s*visible/, "…but prints in full");
+});
+
+test("css: phone and accessibility safeguards", () => {
+  const css = read("css/styles.css");
+  assert.match(css, /text-size-adjust:\s*100%/, "no text inflation when the phone is turned sideways");
+  assert.match(css, /touch-action:\s*manipulation/, "no double-tap-zoom delay on controls");
+  assert.match(css, /max-height:\s*90dvh/, "modal fits the visible screen under iOS toolbars");
+  assert.match(css, /\.modal\s*\{[^}]*overscroll-behavior:\s*contain/, "scrolling a form doesn't scroll the page behind it");
+  assert.match(css, /prefers-reduced-motion:\s*reduce\)\s*\{[^}]*\.btn\s*\{\s*transition:\s*none/);
+  assert.match(css, /forced-colors:\s*active\)\s*\{[^}]*forced-color-adjust:\s*none/, "progress bars stay visible in Windows high-contrast mode");
+  const fonts = [...css.matchAll(/(?:^|\n)\s*([^{}\n]+)\{[^}]*font-size:\s*(\d+)px/g)].map((m) => m[1].trim());
+  assert.deepEqual(fonts, ["html", 'html[data-text-size="large"]', 'html[data-text-size="xlarge"]'], "the only pixel font sizes are the three root sizes; everything else scales");
+});
