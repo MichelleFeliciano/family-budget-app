@@ -341,6 +341,7 @@ function handleViewClick(e) {
     case "sync-now": handleSyncNow(); break;
     case "disconnect-github": handleDisconnectGithub(); break;
     case "export-data": handleExportData(); break;
+    case "export-csv": handleExportCsv(); break;
     case "trigger-import": byId("import-file-input").click(); break;
     case "reset-data": handleResetData(); break;
     case "set-text-size": setTextSize(btn.dataset.size); applyTextSize(); render(); break;
@@ -724,15 +725,20 @@ function renderPayPeriodSection() {
 function renderBillsSection() {
   const bills = sortBills(state.data.bills, state.billSort, state.data.categories);
 
+  const viewYear = Number(state.month.slice(0, 4));
+  const viewMonth = Number(state.month.slice(5, 7)) - 1;
   const rows = bills.map((b) => {
     const paidTxn = findBillPayment(state.data.transactions, b.id, state.month);
+    const dueThisMonth = billDueInMonth(b, viewYear, viewMonth);
+    const nextDue = dueThisMonth ? null : nextBillDue(b, new Date());
+    const freq = billFrequencyLabel(b);
     // A bill with no category (or a deleted one) counts as Bills & Utilities, so show that in the dropdown too.
     const cat = getCategory(b.categoryId) || getCategory("bills") || state.data.categories.find((c) => c.type === "expense");
     return `
       <div class="bill-item bill-item-list${paidTxn ? " is-paid" : ""}">
         <div class="bill-main">
           <div class="bill-name">${escapeHtml(b.name)}</div>
-          <div class="bill-meta">${formatMoney(b.amount)}${b.dueDay ? ` • Due on the ${ordinal(b.dueDay)}` : ""}</div>
+          <div class="bill-meta">${formatMoney(b.amount)}${b.dueDay ? ` • Due on the ${ordinal(b.dueDay)}` : ""}${freq ? ` • ${escapeHtml(freq)}` : ""}</div>
           <label class="bill-cat">
             <span class="cat-dot" style="background:${cat ? cat.color : "var(--cat-other)"}"></span>
             <select class="bill-cat-select" data-bill-id="${b.id}" data-focus-key="bill:${b.id}" aria-label="Category for ${escapeHtml(b.name)}">${categoryOptions("expense", cat ? cat.id : "")}</select>
@@ -741,7 +747,9 @@ function renderBillsSection() {
         ${paidTxn
           ? `<span class="bill-paid-badge">✓ Paid ${formatMoney(paidTxn.amount)}</span>
              <button class="btn btn-link" data-action="undo-bill-payment" data-id="${b.id}" data-txn-id="${paidTxn.id}">Undo</button>`
-          : `<button class="btn btn-primary" data-action="mark-bill-paid" data-id="${b.id}">Mark Paid</button>`}
+          : dueThisMonth
+            ? `<button class="btn btn-primary" data-action="mark-bill-paid" data-id="${b.id}">Mark Paid</button>`
+            : `<span class="bill-next">Not due this month${nextDue ? ` — next ${formatShortDate(nextDue)}` : ""}</span>`}
         <button class="btn btn-icon" data-action="edit-bill" data-id="${b.id}" aria-label="Edit bill">✏️</button>
       </div>`;
   }).join("");
@@ -952,6 +960,19 @@ function renderSettings() {
         <button class="btn" data-action="trigger-import">Restore from Backup</button>
         <input type="file" id="import-file-input" accept="application/json" class="hidden">
       </div>
+    </div>
+
+    <div class="settings-section">
+      <h2>📊 Spreadsheet</h2>
+      <p class="help-text">Download your transactions as a file that opens in Excel or Google Sheets.</p>
+      <div class="form-group">
+        <label for="export-year">Which transactions?</label>
+        <select id="export-year">
+          <option value="">All of them</option>
+          ${transactionYears(state.data.transactions).map((y) => `<option value="${y}">Just ${y}</option>`).join("")}
+        </select>
+      </div>
+      <button class="btn btn-large" data-action="export-csv">Download Spreadsheet (CSV)</button>
     </div>
 
     <div class="settings-section">
@@ -1551,12 +1572,16 @@ function renderPrintSheet(mode) {
         <tfoot><tr><td></td><td>Total</td><td class="num">${formatMoney(sheet.total)}</td><td></td></tr></tfoot>
       </table>` : '<p>No bills with a due date fall in this pay period.</p>'}
       ${sheet.skipped.length ? `<p class="print-sub">Not shown (no due date): ${sheet.skipped.map(escapeHtml).join(", ")}</p>` : ""}
+      ${sheet.notDue && sheet.notDue.length ? `<p class="print-sub">Not due this month: ${sheet.notDue.map(escapeHtml).join(", ")}</p>` : ""}
     </div>`;
 }
 
 function openBillModal(existing) {
   const isEdit = !!existing;
   const bill = existing || { name: "", amount: "", dueDay: "", categoryId: "bills" };
+  const frequency = bill.frequency || "monthly";
+  const dueMonth = Number(bill.dueMonth) || new Date().getMonth() + 1;
+  const monthNames = Array.from({ length: 12 }, (_, i) => new Date(2026, i, 1).toLocaleDateString("en-US", { month: "long" }));
 
   openModal(`
     <h2>${isEdit ? "Edit" : "Add"} Bill</h2>
@@ -1580,9 +1605,18 @@ function openBillModal(existing) {
           <input type="number" id="bill-amount" min="0" step="0.01" value="${bill.amount}" required>
         </div>
         <div class="form-group">
-          <label for="bill-due-day">Due Day (optional)</label>
-          <input type="number" id="bill-due-day" min="1" max="31" value="${bill.dueDay || ""}" placeholder="e.g. 15">
+          <label for="bill-due-day" id="bill-due-day-label">${frequency === "monthly" ? "Due Day (optional)" : "Due Day"}</label>
+          <input type="number" id="bill-due-day" min="1" max="31" value="${bill.dueDay || ""}" placeholder="e.g. 15" ${frequency === "monthly" ? "" : "required"}>
         </div>
+      </div>
+      <div class="form-group">
+        <label for="bill-frequency">How often?</label>
+        <select id="bill-frequency">${BILL_FREQUENCIES.map(([value, label]) => `<option value="${value}" ${value === frequency ? "selected" : ""}>${label}</option>`).join("")}</select>
+      </div>
+      <div class="form-group" id="bill-month-group" style="${frequency === "monthly" ? "display:none;" : ""}">
+        <label for="bill-due-month">Which month is it due?</label>
+        <select id="bill-due-month">${monthNames.map((name, i) => `<option value="${i + 1}" ${i + 1 === dueMonth ? "selected" : ""}>${name}</option>`).join("")}</select>
+        <p class="help-text">Pick any one month it's due — we'll work out the others. The bill only shows up in the months it's due.</p>
       </div>
       <div class="modal-actions">
         <button type="button" class="btn" data-action="modal-cancel">Cancel</button>
@@ -1592,9 +1626,18 @@ function openBillModal(existing) {
     </form>
   `);
 
+  byId("bill-frequency").addEventListener("change", () => {
+    const monthly = byId("bill-frequency").value === "monthly";
+    byId("bill-month-group").style.display = monthly ? "none" : "";
+    byId("bill-due-day").required = !monthly;
+    byId("bill-due-day-label").textContent = monthly ? "Due Day (optional)" : "Due Day";
+  });
+
   byId("bill-form").addEventListener("submit", (e) => {
     e.preventDefault();
     const dueDayVal = byId("bill-due-day").value;
+    const chosenFrequency = byId("bill-frequency").value;
+    if (chosenFrequency !== "monthly" && !dueDayVal) { showToast("Enter the day of the month it's due."); return; }
     const updated = {
       id: isEdit ? bill.id : uid(),
       addedOn: isEdit ? bill.addedOn : todayISO(),
@@ -1603,6 +1646,8 @@ function openBillModal(existing) {
       debtId: byId("bill-debt") && byId("bill-debt").value ? byId("bill-debt").value : null,
       amount: Math.abs(Number(byId("bill-amount").value) || 0),
       dueDay: dueDayVal ? Math.min(31, Math.max(1, Math.round(Number(dueDayVal)))) : null,
+      frequency: chosenFrequency,
+      dueMonth: chosenFrequency === "monthly" ? null : Number(byId("bill-due-month").value),
     };
     mutateData((d) => {
       if (isEdit) {
@@ -1783,16 +1828,27 @@ function handleDisconnectGithub() {
   });
 }
 
-function handleExportData() {
-  const blob = new Blob([JSON.stringify(state.data, null, 2)], { type: "application/json" });
+function downloadFile(filename, text, type) {
+  const blob = new Blob([text], { type });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = `family-budget-backup-${todayISO()}.json`;
+  a.download = filename;
   document.body.appendChild(a);
   a.click();
   a.remove();
   URL.revokeObjectURL(url);
+}
+
+function handleExportCsv() {
+  const year = byId("export-year").value;
+  if (!state.data.transactions.length) { showToast("There are no transactions to download yet."); return; }
+  downloadFile(`family-budget-transactions-${year || "all"}.csv`, transactionsToCsv(state.data, year), "text/csv;charset=utf-8");
+  showToast("Spreadsheet downloaded");
+}
+
+function handleExportData() {
+  downloadFile(`family-budget-backup-${todayISO()}.json`, JSON.stringify(state.data, null, 2), "application/json");
 }
 
 function handleImportFile(file) {

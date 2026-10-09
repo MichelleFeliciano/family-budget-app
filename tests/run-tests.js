@@ -1037,3 +1037,126 @@ test("css: print preview wraps long bill names without breaking the 'Paid' headi
   assert.match(css, /\.print-sheet th:nth-child\(2\), \.print-sheet td:nth-child\(2\)\s*\{[^}]*overflow-wrap:\s*anywhere/);
   assert.match(css, /\.print-sheet th, \.print-sheet td:first-child, \.print-sheet td\.num, \.print-sheet td\.paid-box\s*\{\s*white-space:\s*nowrap/);
 });
+
+/* ------------------------------------------------------------------ */
+test("bills that aren't monthly: which months they fall due in", () => {
+  const months = (bill) => Array.from({ length: 12 }, (_, i) => i).filter((i) => billDueInMonth(bill, 2026, i)).map((i) => i + 1);
+  assert.deepEqual(months({ frequency: "quarterly", dueMonth: 3 }), [3, 6, 9, 12]);
+  assert.deepEqual(months({ frequency: "quarterly", dueMonth: 11 }), [2, 5, 8, 11], "counting from any month, wrapping the year");
+  assert.deepEqual(months({ frequency: "semiannual", dueMonth: 12 }), [6, 12]);
+  assert.deepEqual(months({ frequency: "semiannual", dueMonth: 4 }), [4, 10]);
+  assert.deepEqual(months({ frequency: "yearly", dueMonth: 7 }), [7]);
+  assert.equal(months({ frequency: "monthly", dueMonth: 7 }).length, 12);
+  assert.equal(months({}).length, 12, "older bills with no frequency are monthly");
+  assert.equal(months({ frequency: "yearly" }).length, 12, "no month chosen: shown every month rather than hidden");
+  assert.equal(months({ frequency: "yearly", dueMonth: 13 }).length, 12);
+  assert.equal(months({ frequency: "fortnightly", dueMonth: 3 }).length, 12, "unknown frequency: monthly");
+});
+
+test("bills that aren't monthly: due dates across a year end, only in their months", () => {
+  const bill = { frequency: "semiannual", dueMonth: 12 };
+  const dates = billDueDatesInRange(15, at("2026-05-01"), at("2027-07-01"), (y, m) => billDueInMonth(bill, y, m)).map(ymd);
+  assert.deepEqual(dates, ["2026-06-15", "2026-12-15", "2027-06-15"]);
+  assert.equal(billDueDatesInRange(15, at("2026-05-01"), at("2027-07-01")).length, 14, "no filter: every month, as before");
+});
+
+const mixedBills = () => [
+  { id: "water", name: "Water", amount: 45, dueDay: 12 },
+  { id: "car", name: "Car insurance", amount: 600, dueDay: 15, frequency: "semiannual", dueMonth: 4 },     // Apr, Oct
+  { id: "tax", name: "Property tax", amount: 2400, dueDay: 15, frequency: "yearly", dueMonth: 12 },
+  { id: "phone", name: "Phone plan", amount: 90, dueDay: 15, frequency: "quarterly", dueMonth: 3 },        // Mar, Jun, Sep, Dec
+];
+
+test("bills that aren't monthly: only appear in the pay period, Coming Up and Not-marked-paid when they're due", () => {
+  const bills = mixedBills();
+  const oct = getBillsDueInPeriod(bills, P("weekly", "2026-10-02"), at("2026-10-09"));      // Oct 9 - Oct 15
+  assert.deepEqual(oct.due.map((x) => x.bill.name), ["Water", "Car insurance"], "October: car insurance yes; tax and phone plan no");
+  assert.equal(oct.total, 645);
+  const dec = getBillsDueInPeriod(bills, P("weekly", "2026-10-02"), at("2026-12-12"));      // Dec 11 - Dec 17
+  assert.deepEqual(dec.due.map((x) => x.bill.name), ["Water", "Property tax", "Phone plan"], "December: tax and phone plan, not car insurance");
+  assert.deepEqual(billsComingUp(bills, [], at("2026-10-09"), 7).map((x) => x.bill.name), ["Water", "Car insurance"]);
+  assert.deepEqual(billsComingUp(bills, [], at("2026-11-10"), 7).map((x) => x.bill.name), ["Water"], "November: only the monthly one");
+  assert.deepEqual(overdueBills(bills, [], at("2026-10-20")).map((x) => x.bill.name), ["Water", "Car insurance"], "tax and phone plan weren't due, so can't be late");
+  assert.deepEqual(overdueBills(bills, [{ id: "p", billId: "car", date: "2026-10-03" }], at("2026-10-20")).map((x) => x.bill.name), ["Water"], "paid in its due month");
+  assert.deepEqual(overdueBills(bills, [{ id: "p", billId: "car", date: "2026-04-03" }], at("2026-10-20")).map((x) => x.bill.name), ["Water", "Car insurance"], "April's payment doesn't cover October");
+});
+
+test("bills that aren't monthly: next due date and how they're described", () => {
+  const car = { dueDay: 15, frequency: "yearly", dueMonth: 12 };
+  assert.equal(ymd(nextBillDue(car, at("2026-10-09"))), "2026-12-15");
+  assert.equal(ymd(nextBillDue(car, at("2026-12-15"))), "2026-12-15", "today counts");
+  assert.equal(ymd(nextBillDue(car, at("2026-12-16"))), "2027-12-15");
+  assert.equal(ymd(nextBillDue({ dueDay: 31, frequency: "yearly", dueMonth: 2 }, at("2026-10-09"))), "2027-02-28");
+  assert.equal(ymd(nextBillDue({ dueDay: 15, frequency: "quarterly", dueMonth: 3 }, at("2026-10-09"))), "2026-12-15");
+  assert.equal(ymd(nextBillDue({ dueDay: 12 }, at("2026-10-13"))), "2026-11-12", "monthly bills too");
+  assert.equal(nextBillDue({ frequency: "yearly", dueMonth: 3 }, at("2026-10-09")), null, "no due day");
+  assert.equal(billFrequencyLabel({ frequency: "semiannual", dueMonth: 12 }), "Every 6 months (Jun, Dec)");
+  assert.equal(billFrequencyLabel({ frequency: "quarterly", dueMonth: 2 }), "Every 3 months (Feb, May, Aug, Nov)");
+  assert.equal(billFrequencyLabel({ frequency: "yearly", dueMonth: 7 }), "Once a year (Jul)");
+  for (const none of [{}, { frequency: "monthly" }, { frequency: "yearly" }, { frequency: "weird", dueMonth: 3 }]) assert.equal(billFrequencyLabel(none), "");
+});
+
+test("bills that aren't monthly: the printed list only has what's due, and names the rest", () => {
+  const data = mk({ bills: [{ id: "r", name: "Rent", amount: 1000, dueDay: 1 }, ...mixedBills().slice(1)] });
+  const oct = billsSheet(data, "month", at("2026-10-08"));
+  assert.deepEqual(oct.rows.map((r) => [r.due, r.name]), [["1st", "Rent"], ["15th", "Car insurance"]]);
+  assert.equal(oct.total, 1600);
+  assert.deepEqual(oct.notDue, ["Phone plan (next Dec 15)", "Property tax (next Dec 15)"], "same day: by name");
+  const dec = billsSheet(data, "month", at("2026-12-08"));
+  assert.deepEqual(dec.rows.map((r) => r.name), ["Rent", "Phone plan", "Property tax"]);
+  assert.deepEqual(dec.notDue, ["Car insurance (next Apr 15)"]);
+  assert.deepEqual(billsSheet(mk({ bills: [{ id: "r", name: "Rent", dueDay: 1, amount: 5 }] }), "month", at("2026-10-08")).notDue, []);
+});
+
+test("bills that aren't monthly: the bill form asks how often and which month, and refuses a missing due day", () => {
+  const app = read("js/app.js");
+  for (const needle of ["bill-frequency", "bill-due-month", "bill-month-group", "Enter the day of the month it's due.", "billDueInMonth(b, viewYear, viewMonth)", "Not due this month", "Not due this month: ", "frequency: chosenFrequency"])
+    assert.ok(app.includes(needle), `app.js is missing ${needle}`);
+});
+
+/* ------------------------------------------------------------------ */
+test("spreadsheet export: cells are quoted, and free text can't run as a formula", () => {
+  assert.equal(csvCell(null), "");
+  assert.equal(csvCell("plain"), "plain");
+  assert.equal(csvCell('say "hi", ok'), '"say ""hi"", ok"');
+  assert.equal(csvCell("two\nlines"), '"two\nlines"');
+  assert.equal(csvCell("  padded "), '"  padded "');
+  assert.equal(csvCell("=1+1", { text: true }), "'=1+1");
+  assert.equal(csvCell("+cmd", { text: true }), "'+cmd");
+  assert.equal(csvCell("-2+3", { text: true }), "'-2+3");
+  assert.equal(csvCell("@SUM(A1)", { text: true }), "'@SUM(A1)");
+  assert.equal(csvCell("=1+1"), "=1+1", "only free-text cells get the guard");
+  assert.equal(csvCell(-5), "-5");
+});
+
+test("spreadsheet export: transactions as rows, oldest first, spending negative", () => {
+  const data = mk({ transactions: [
+    { id: "1", type: "expense", date: "2026-10-05", categoryId: "food", description: 'Groceries, "big" store', amount: 82.5 },
+    { id: "2", type: "income", date: "2026-01-02", categoryId: "income", description: "=1+1", amount: 1500 },
+    { id: "3", type: "expense", date: "2025-12-31", categoryId: "gone", description: "  spaced ", amount: 0.1 + 0.2 },
+    { id: "4", type: "expense", date: "2026-10-05", categoryId: "other", description: "a\nb", amount: 0 },
+  ] });
+  const csv = transactionsToCsv(data);
+  assert.ok(csv.startsWith("﻿Date,Type,Category,Description,Amount (spending is negative)\r\n"), "byte-order mark so Excel reads accents, and a header");
+  assert.equal(csv.slice(1), [
+    "Date,Type,Category,Description,Amount (spending is negative)",
+    '2025-12-31,Expense,Uncategorized,"  spaced ",-0.30',
+    "2026-01-02,Income,Income,'=1+1,1500.00",
+    '2026-10-05,Expense,Food & Groceries,"Groceries, ""big"" store",-82.50',
+    '2026-10-05,Expense,Other,"a\nb",0.00',
+    "",
+  ].join("\r\n"), "oldest first; same day keeps entry order; cents exact; no -0.00; unknown category named");
+  const y26 = transactionsToCsv(data, "2026").split("\r\n");
+  assert.equal(y26.length, 5, "header + 3 rows + trailing newline");
+  assert.ok(!y26.join("").includes("2025-12-31"));
+  assert.equal(transactionsToCsv(mk(), "2026"), "﻿Date,Type,Category,Description,Amount (spending is negative)\r\n", "nothing to list: just the header");
+});
+
+test("spreadsheet export: the years offered come from the data", () => {
+  assert.deepEqual(transactionYears([{ date: "2025-03-01" }, { date: "2026-10-05" }, { date: "2026-01-01" }, { date: "garbage" }, {}]), ["2026", "2025"]);
+  assert.deepEqual(transactionYears([]), []);
+  const app = read("js/app.js");
+  for (const needle of ["export-csv", "handleExportCsv", "export-year", "transactionsToCsv(state.data, year)", "text/csv;charset=utf-8"])
+    assert.ok(app.includes(needle), `app.js is missing ${needle}`);
+  assert.equal((app.match(/URL\.createObjectURL/g) || []).length, 1, "one shared download helper");
+});

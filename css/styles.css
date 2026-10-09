@@ -447,6 +447,7 @@ main#view-container {
   background: var(--color-surface);
   color: var(--color-text);
 }
+.bill-next { flex: 1 1 auto; color: var(--color-text-muted); font-size: 0.95rem; }
 .bill-paid-badge {
   display: inline-block;
   color: var(--color-primary-dark);
@@ -669,6 +670,7 @@ main#view-container {
   /* Bills list: details on top, the big buttons in a row underneath. */
   .bill-item-list .bill-main { flex: 1 1 100%; }
   .bill-item-list > .btn-primary, .bill-item-list > .bill-paid-badge { flex: 1 1 auto; justify-content: center; text-align: center; }
+  .bill-item-list > .bill-next { text-align: left; }
 
   .print-sheet { padding: 8px; }
   .print-sheet table { font-size: 0.9rem; }

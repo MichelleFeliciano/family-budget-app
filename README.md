@@ -43,7 +43,9 @@ to the public repository: the app will show a red warning if it detects that.
     opens the app. Paychecks start from the day you set them up; earlier ones
     can be added by hand. Edit a paycheck's amount any time — it applies to
     future paydays only. Deleting a paycheck from the Log keeps it deleted.
-  - **Your Bills** — each bill on its own with an amount, due day, and category
+  - **Your Bills** — each bill on its own with an amount, due day, how often
+    it's due (every month, every 3 or 6 months, or once a year — such a bill
+    only shows up in the months it's due), and category
     (change the category right in the list). Check bills off with *Mark Paid* (it offers the last amount paid, handy for
     bills that change),
     sort the list by due day, name or category, and optionally link a bill to a
@@ -58,7 +60,9 @@ to the public repository: the app will show a red warning if it detects that.
   The **Debt-Free Date** card estimates when everything will be paid off, and
   what paying a little extra each month would change.
 - **Settings** — GitHub sync, categories, passphrase, **text size** (Normal,
-  Large, Extra large — per device), backups, and locking a device.
+  Large, Extra large — per device), backups, **Spreadsheet** (download your
+  transactions as a CSV file for Excel or Google Sheets — all of them or one
+  year; spending is negative so a column can be summed), and locking a device.
 
 ## Undo
 
@@ -164,7 +168,8 @@ remembered so a deleted item doesn't come back.
   They cover the budget and pay-period math (including evenings and daylight
   saving), regular paychecks (every frequency, no duplicates across devices),
   the month-by-month figures, the printable list, undo, the debt-free
-  projection, Log search, carried-over budgets, overdue bills, savings goals, the sync merge logic,
+  projection, Log search, carried-over budgets, overdue bills, savings goals, bills that aren't monthly,
+  the spreadsheet export, the sync merge logic,
   backup/restore, the offline service worker, bill and debt linking, and color
   contrast in light and dark mode.
 - Deploying is just pushing to `master`; GitHub Pages publishes it in about a

@@ -229,14 +229,14 @@ function getPayPeriod(paySchedule, today) {
 }
 
 /** Every real calendar date a day-of-month bill falls on within [start, end). */
-function billDueDatesInRange(dueDay, start, end) {
+function billDueDatesInRange(dueDay, start, end, monthOk = () => true) {
   const dates = [];
   let cursor = new Date(start.getFullYear(), start.getMonth(), 1);
   const lastMonth = new Date(end.getFullYear(), end.getMonth(), 1);
   while (cursor <= lastMonth) {
     const day = clampDayOfMonth(cursor.getFullYear(), cursor.getMonth(), dueDay);
     const candidate = new Date(cursor.getFullYear(), cursor.getMonth(), day);
-    if (candidate >= start && candidate < end) dates.push(candidate);
+    if (monthOk(cursor.getFullYear(), cursor.getMonth()) && candidate >= start && candidate < end) dates.push(candidate);
     cursor = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1);
   }
   return dates;
@@ -249,7 +249,7 @@ function getBillsDueInPeriod(bills, paySchedule, today, transactions = []) {
   bills
     .filter((b) => b.dueDay)
     .forEach((b) => {
-      billDueDatesInRange(b.dueDay, period.start, period.end).forEach((date) => {
+      billDueDatesInRange(b.dueDay, period.start, period.end, (y, m) => billDueInMonth(b, y, m)).forEach((date) => {
         // Paid means a payment was logged in the month the bill falls due.
         const paid = findBillPayment(transactions, b.id, toLocalISODate(date).slice(0, 7)) || null;
         due.push({ bill: b, date, paid });
@@ -471,13 +471,19 @@ function billsSheet(data, mode, today) {
     };
   }
   const monthKey = toLocalISODate(today).slice(0, 7);
-  const rows = sortBills(data.bills, "due", data.categories).map((b) => ({
+  const sorted = sortBills(data.bills, "due", data.categories);
+  const dueNow = sorted.filter((b) => billDueInMonth(b, today.getFullYear(), today.getMonth()));
+  const rows = dueNow.map((b) => ({
     name: b.name,
     amount: roundCents(b.amount),
     due: b.dueDay ? ordinal(b.dueDay) : "Any day",
     paid: !!findBillPayment(data.transactions, b.id, monthKey),
   }));
-  return { title: `Bills for ${formatMonthLabel(monthKey)}`, subtitle: "Due on this day of each month", rows, total: sum(rows), skipped: [] };
+  const notDue = sorted.filter((b) => !dueNow.includes(b)).map((b) => {
+    const next = nextBillDue(b, today);
+    return next ? `${b.name} (next ${short(next)})` : b.name;
+  });
+  return { title: `Bills for ${formatMonthLabel(monthKey)}`, subtitle: "Due on this day of the month", rows, total: sum(rows), skipped: [], notDue };
 }
 
 /* ---------- Coming up (bills due soon) ---------- */
@@ -491,7 +497,7 @@ function billsComingUp(bills, transactions, today, days = 7) {
   const end = addDays(start, days + 1);
   const out = [];
   bills.filter((b) => b.dueDay).forEach((bill) => {
-    billDueDatesInRange(bill.dueDay, start, end).forEach((date) => {
+    billDueDatesInRange(bill.dueDay, start, end, (y, m) => billDueInMonth(bill, y, m)).forEach((date) => {
       out.push({ bill, date, paid: findBillPayment(transactions, bill.id, toLocalISODate(date).slice(0, 7)) || null });
     });
   });
@@ -653,6 +659,7 @@ function overdueBills(bills, transactions, today) {
   const monthKey = toLocalISODate(todayStart).slice(0, 7);
   const out = [];
   bills.filter((b) => b.dueDay).forEach((bill) => {
+    if (!billDueInMonth(bill, y, m)) return;
     const date = new Date(y, m, clampDayOfMonth(y, m, Number(bill.dueDay)));
     if (date >= todayStart) return;
     if (bill.addedOn && toLocalISODate(date) < bill.addedOn) return;
@@ -702,4 +709,96 @@ function recordGoalContribution(data, goal, date, amount, id) {
   const txn = { id, type: "expense", date, categoryId: category ? category.id : "savings", description: `Savings: ${goal.name}`, amount, goalId: goal.id };
   data.transactions.push(txn);
   return txn;
+}
+
+/* ---------- Bills that aren't monthly ----------
+   A bill repeats every month unless it says otherwise: every 3 or 6 months, or
+   once a year, counting from `dueMonth` (1-12). Such a bill only falls due in
+   those months, so it only shows up in the pay period, Coming Up, the printed
+   list and "not marked paid" then. */
+
+const BILL_FREQUENCIES = [
+  ["monthly", "Every month", 1],
+  ["quarterly", "Every 3 months", 3],
+  ["semiannual", "Every 6 months", 6],
+  ["yearly", "Once a year", 12],
+];
+const SHORT_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+function billIntervalMonths(bill) {
+  const hit = BILL_FREQUENCIES.find(([value]) => value === bill.frequency);
+  return hit ? hit[2] : 1;
+}
+
+/** Is this bill due in the given month (monthIndex 0-11)? A bill with no usable month is treated as monthly. */
+function billDueInMonth(bill, year, monthIndex) {
+  const n = billIntervalMonths(bill);
+  const base = Number(bill.dueMonth);
+  if (n === 1 || !(base >= 1 && base <= 12)) return true;
+  return (((monthIndex + 1 - base) % n) + n) % n === 0;
+}
+
+/** The next time the bill falls due on or after `from`, or null (no due day). */
+function nextBillDue(bill, from) {
+  if (!bill.dueDay) return null;
+  const start = new Date(from.getFullYear(), from.getMonth(), from.getDate());
+  return billDueDatesInRange(bill.dueDay, start, addDays(start, 400), (y, m) => billDueInMonth(bill, y, m))[0] || null;
+}
+
+/** "Every 6 months (Jun, Dec)" — empty for a monthly bill. */
+function billFrequencyLabel(bill) {
+  const n = billIntervalMonths(bill);
+  const base = Number(bill.dueMonth);
+  if (n === 1 || !(base >= 1 && base <= 12)) return "";
+  const months = [];
+  for (let k = 0; k < 12 / n; k++) months.push((base - 1 + k * n) % 12);
+  const names = months.sort((a, b) => a - b).map((i) => SHORT_MONTHS[i]).join(", ");
+  return n === 12 ? `Once a year (${names})` : `Every ${n} months (${names})`;
+}
+
+/* ---------- Spreadsheet export ---------- */
+
+/**
+ * One cell of a CSV file. Quotes anything a spreadsheet could misread, and for
+ * free text starts any cell that begins with = + - @ with an apostrophe so
+ * Excel or Sheets can never run it as a formula.
+ */
+function csvCell(value, { text = false } = {}) {
+  let s = String(value === null || value === undefined ? "" : value);
+  if (text && /^[=+\-@\t\r]/.test(s)) s = "'" + s;
+  return /[",\r\n]/.test(s) || /^\s|\s$/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+
+/** The years that have transactions, newest first. */
+function transactionYears(transactions) {
+  const years = new Set();
+  transactions.forEach((t) => { const y = String(t.date || "").slice(0, 4); if (/^\d{4}$/.test(y)) years.add(y); });
+  return [...years].sort().reverse();
+}
+
+/**
+ * Transactions as CSV text for Excel / Google Sheets, oldest first. Amounts are
+ * plain numbers (spending negative) so a column can simply be summed. Starts
+ * with a byte-order mark so accents and symbols open correctly in Excel.
+ * `year` ("2026") limits it to one year; leave it out for everything.
+ */
+function transactionsToCsv(data, year) {
+  const nameOf = (t) => (data.categories.find((c) => c.id === t.categoryId) || {}).name || "Uncategorized";
+  const list = data.transactions
+    .map((t, i) => ({ t, i }))
+    .filter(({ t }) => !year || String(t.date || "").startsWith(year + "-"))
+    .sort((a, b) => (a.t.date < b.t.date ? -1 : a.t.date > b.t.date ? 1 : a.i - b.i));
+  const lines = [["Date", "Type", "Category", "Description", "Amount (spending is negative)"].join(",")];
+  list.forEach(({ t }) => {
+    const cents = roundCents(t.amount);
+    const signed = t.type === "income" ? cents : -cents;
+    lines.push([
+      csvCell(t.date),
+      t.type === "income" ? "Income" : "Expense",
+      csvCell(nameOf(t), { text: true }),
+      csvCell(t.description, { text: true }),
+      (signed === 0 ? 0 : signed).toFixed(2),
+    ].join(","));
+  });
+  return "\ufeff" + lines.join("\r\n") + "\r\n";
 }
