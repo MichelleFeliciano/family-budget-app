@@ -680,3 +680,168 @@ test("app wiring: new screens are hooked up and ordinal() lives in one place", (
   assert.equal((app.match(/function ordinal\(/g) || []).length, 0, "ordinal() now lives in calculations.js");
   assert.equal((read("js/calculations.js").match(/function ordinal\(/g) || []).length, 1);
 });
+
+/* ------------------------------------------------------------------ */
+test("coming up: the next 7 days including today, across a month end, unpaid vs paid", () => {
+  const bills = [
+    { id: "1", name: "Rent", amount: 1000, dueDay: 1 }, { id: "2", name: "Water", amount: 45, dueDay: 30 },
+    { id: "3", name: "Phone", amount: 80, dueDay: 31 }, { id: "4", name: "Gym", amount: 20, dueDay: 7 },
+    { id: "5", name: "Netflix", amount: 15 }, { id: "6", name: "Far", amount: 5, dueDay: 15 },
+  ];
+  const txns = [{ id: "t", billId: "1", date: "2026-11-01" }, { id: "u", billId: "2", date: "2026-10-05" }];
+  const soon = billsComingUp(bills, txns, at("2026-10-28"), 7); // Oct 28 .. Nov 4
+  assert.deepEqual(soon.map((x) => [x.bill.name, ymd(x.date), !!x.paid]), [["Water", "2026-10-30", true], ["Phone", "2026-10-31", false], ["Rent", "2026-11-01", true]],
+    "Water's payment was logged in October (its due month); Rent's in November");
+  assert.deepEqual(billsComingUp(bills, [], at("2026-10-07"), 7).map((x) => x.bill.name), ["Gym"], "today counts");
+  assert.deepEqual(billsComingUp(bills, [], at("2026-10-08"), 7).map((x) => x.bill.name), ["Far"], "yesterday's bill (the 7th) is gone; a week ahead (the 15th) is in");
+  assert.deepEqual(billsComingUp(bills, [], at("2026-10-08"), 6).map((x) => x.bill.name), [], "the window length is respected");
+  assert.equal(ymd(billsComingUp(bills, [], at("2026-02-27"), 7).find((x) => x.bill.name === "Phone").date), "2026-02-28", "a 31st bill falls on the 28th in February");
+  assert.deepEqual(billsComingUp([], [], at("2026-10-07")), []);
+});
+
+test("coming up: friendly day names", () => {
+  assert.equal(dayLabel(at("2026-10-08"), at("2026-10-08")), "Today");
+  assert.equal(dayLabel(at("2026-10-09"), at("2026-10-08")), "Tomorrow");
+  assert.equal(dayLabel(at("2026-10-16"), at("2026-10-08")), "Fri, Oct 16");
+  assert.equal(dayLabel(at("2026-11-01"), at("2026-10-31")), "Tomorrow", "across a month end");
+});
+
+const undoFixture = () => mk({
+  debts: [{ id: "d1", name: "Visa", currentBalance: 1000 }],
+  bills: [{ id: "b1", name: "Visa payment", categoryId: "debt", debtId: "d1", amount: 150 }],
+  tombstones: ["transaction:old"],
+});
+
+test("undo: a deleted debt payment comes back, and so does the debt balance", () => {
+  const data = undoFixture();
+  recordBillPayment(data, data.bills[0], "2026-10-05", 150, "p1");
+  assert.equal(data.debts[0].currentBalance, 850);
+  const before = snapshotForUndo(data);
+  removeTransaction(data, "p1");
+  const after = snapshotForUndo(data);
+  assert.equal(data.debts[0].currentBalance, 1000);
+  assert.ok(data.tombstones.includes("transaction:p1"));
+  undoDelete(data, before, after);
+  assert.equal(data.debts[0].currentBalance, 850, "balance goes back down");
+  assert.deepEqual(data.transactions.map((t) => t.id), ["p1"]);
+  assert.equal(data.transactions[0].debtApplied, 150, "the payment is exactly as it was");
+  assert.deepEqual(data.tombstones, ["transaction:old"], "its delete-marker is gone, older ones stay");
+});
+
+test("undo: bills, debts, categories and paychecks come back with their delete-markers removed", () => {
+  const data = undoFixture();
+  data.recurringIncome = [{ id: "s1", name: "Pay", amount: 100, frequency: "weekly", anchorDate: "2026-10-02" }];
+  for (const [list, id, key] of [["bills", "b1", "bill"], ["debts", "d1", "debt"], ["recurringIncome", "s1", "paycheck"], ["categories", "food", "category"]]) {
+    const before = snapshotForUndo(data);
+    const record = data[list].find((r) => r.id === id);
+    data[list] = data[list].filter((r) => r.id !== id);
+    data.tombstones.push(`${key}:${id}`);
+    const after = snapshotForUndo(data);
+    undoDelete(data, before, after);
+    assert.deepEqual(data[list].find((r) => r.id === id), record, `${key} restored`);
+    assert.ok(!data.tombstones.includes(`${key}:${id}`), `${key} delete-marker removed`);
+  }
+});
+
+test("undo: leaves everything done since alone and never duplicates", () => {
+  const data = undoFixture();
+  data.transactions.push({ id: "t1", type: "expense", amount: 5 });
+  const before = snapshotForUndo(data);
+  removeTransaction(data, "t1");
+  const after = snapshotForUndo(data);
+  data.transactions.push({ id: "t2", type: "expense", amount: 7 });        // a new entry made meanwhile
+  data.debts[0].currentBalance = 900;                                    // a balance edited meanwhile
+  undoDelete(data, before, after);
+  assert.deepEqual(data.transactions.map((t) => t.id).sort(), ["t1", "t2"]);
+  assert.equal(data.debts[0].currentBalance, 900, "a balance changed since is not overwritten");
+  undoDelete(data, before, after);
+  assert.equal(data.transactions.filter((t) => t.id === "t1").length, 1, "undoing twice doesn't duplicate");
+});
+
+test("undo: before the deletion reaches GitHub, an undone item survives the next sync", () => {
+  const data = undoFixture();
+  const remote = JSON.parse(JSON.stringify(data));          // GitHub still has the bill
+  const before = snapshotForUndo(data);
+  data.bills = []; data.tombstones.push("bill:b1");
+  const after = snapshotForUndo(data);
+  data.lastUpdated = "2026-10-08T10:00:00.000Z";
+  undoDelete(data, before, after);
+  const merged = mergeData(data, remote);
+  assert.equal(merged.bills.length, 1, "no stray delete-marker is left to remove it again");
+});
+
+test("sync is held back while Undo is on offer", () => {
+  const app = read("js/app.js");
+  assert.match(app, /state\.syncHoldUntil = Date\.now\(\) \+ UNDO_WINDOW_MS/);
+  assert.match(app, /Math\.max\(1200, state\.syncHoldUntil - Date\.now\(\)\)/);
+  assert.equal((app.match(/deleteWithUndo\("/g) || []).length, 6, "transaction, payment, bill, debt, category, paycheck");
+  assert.doesNotMatch(app, /showToast\("(Transaction|Bill|Debt|Category|Paycheck|Payment) (deleted|removed)"\)/, "every delete offers Undo");
+});
+
+test("debt-free date: one debt matches the payoff formula", () => {
+  let seed = 4242;
+  const rnd = () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
+  for (let i = 0; i < 300; i++) {
+    const P = Math.round(100 + rnd() * 20000), apr = Math.round(rnd() * 30 * 100) / 100;
+    const min = Math.ceil((P * apr) / 1200) + 1 + Math.round(rnd() * 400);
+    const sim = simulatePayoff([{ name: "d", currentBalance: P, interestRate: apr, minPayment: min }], "snowball", 0);
+    assert.equal(sim.months, estimateMonthsToPayoff(P, apr, min).months, `P=${P} apr=${apr} min=${min}`);
+  }
+});
+
+test("debt-free date: money freed by a finished debt rolls onto the next, extra speeds it up", () => {
+  const debts = [{ name: "A", currentBalance: 100, interestRate: 0, minPayment: 50 }, { name: "B", currentBalance: 300, interestRate: 0, minPayment: 50 }];
+  assert.deepEqual(simulatePayoff(debts, "snowball", 0), { months: 4, interest: 0 }, "B alone would take 6 months without the rollover");
+  assert.equal(simulatePayoff(debts, "snowball", 100).months, 2);
+  assert.equal(simulatePayoff([], "snowball", 0).months, 0);
+  assert.equal(simulatePayoff([{ name: "Done", currentBalance: 0, minPayment: 0 }], "snowball", 0).months, 0, "paid-off debts are ignored");
+});
+
+test("debt-free date: avalanche costs less interest than snowball when the big-interest debt is bigger", () => {
+  const debts = [{ name: "X", currentBalance: 1000, interestRate: 5, minPayment: 100 }, { name: "Y", currentBalance: 2000, interestRate: 25, minPayment: 100 }];
+  const snow = simulatePayoff(debts, "snowball", 200), ava = simulatePayoff(debts, "avalanche", 200);
+  assert.ok(ava.interest < snow.interest, `avalanche ${ava.interest} vs snowball ${snow.interest}`);
+  assert.ok(simulatePayoff(debts, "avalanche", 300).months < simulatePayoff(debts, "avalanche", 200).months);
+  assert.ok(simulatePayoff(debts, "avalanche", 200).interest < simulatePayoff(debts, "avalanche", 0).interest);
+});
+
+test("debt-free date: says why it can't give one instead of guessing", () => {
+  assert.match(simulatePayoff([{ name: "Visa", currentBalance: 500, interestRate: 10, minPayment: 0 }], "snowball").error, /Add a monthly payment for Visa/);
+  assert.match(simulatePayoff([{ name: "Visa", currentBalance: 1000, interestRate: 24, minPayment: 10 }], "snowball").error, /never get paid off/);
+  const rescued = simulatePayoff([{ name: "A", currentBalance: 100, interestRate: 0, minPayment: 500 }, { name: "B", currentBalance: 1000, interestRate: 24, minPayment: 10 }], "snowball");
+  assert.equal(rescued.months, 3, "a payment that is too small is rescued by money freed from another debt");
+});
+
+test("debt-free date: month names roll over the year", () => {
+  assert.equal(monthsFromNowLabel(at("2026-10-31"), 0), "October 2026");
+  assert.equal(monthsFromNowLabel(at("2026-10-31"), 17), "March 2028");
+  assert.equal(monthsFromNowLabel(at("2026-12-15"), 1), "January 2027");
+  assert.equal(monthsFromNowLabel(at("2026-01-31"), 1), "February 2026", "no skipping a short month from the 31st");
+});
+
+test("search the Log: words match description, category, date and amount", () => {
+  const cats = [{ id: "food", name: "Food & Groceries" }, { id: "bills", name: "Bills & Utilities" }];
+  const txns = [
+    { id: "1", date: "2026-10-03", description: "Walmart", categoryId: "food", amount: 82.5, type: "expense" },
+    { id: "2", date: "2026-09-20", description: "WALMART supercenter", categoryId: "food", amount: 40, type: "expense" },
+    { id: "3", date: "2026-10-12", description: "Electric", categoryId: "bills", amount: 120, type: "expense" },
+    { id: "4", date: "2026-08-02", description: "Pay", categoryId: "income", amount: 2400, type: "income" },
+  ];
+  const ids = (q) => searchTransactions(txns, cats, q).map((t) => t.id).join("");
+  assert.equal(ids("walmart"), "12", "any case, newest first");
+  assert.equal(ids("walmart 40"), "2", "every word must match");
+  assert.equal(ids("utilities"), "3", "category name");
+  assert.equal(ids("2026-09"), "2", "date");
+  assert.equal(ids("$82.50"), "1", "amount typed with a dollar sign");
+  assert.equal(ids("82.5"), "1");
+  assert.equal(ids("2,400"), "4", "amount as shown with a comma");
+  assert.equal(ids("zzz"), "");
+  assert.equal(ids("   "), "3124", "no words: everything, newest first");
+});
+
+test("search the Log: wired to type-as-you-go filtering without redrawing the box", () => {
+  const app = read("js/app.js");
+  assert.match(app, /e\.target\.id !== "txn-search"/);
+  assert.match(app, /byId\("txn-results"\)\.innerHTML = renderTransactionResults\(\)/);
+  assert.match(read("css/styles.css"), /\.toast-btn\s*\{[^}]*min-height:\s*var\(--touch-min\)/, "Undo button is a big target");
+});

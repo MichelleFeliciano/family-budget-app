@@ -22,8 +22,9 @@ to the public repository: the app will show a red warning if it detects that.
 
 ## What's inside
 
-- **Home** — this month's income, spending, what's left over, and total debt.
-  Each spending category says how it compares with last month, and **Month by
+- **Home** — **Coming Up** shows the bills due in the next 7 days that aren't
+  paid yet, each with a *Mark Paid* button. Then this month's income, spending,
+  what's left over, and total debt. Each spending category says how it compares with last month, and **Month by
   Month** lists the last 6 (or 12) months side by side — tap one to open it.
 - **Budget** — plan how much to spend in each category and see what you've
   actually spent. Below it:
@@ -42,11 +43,21 @@ to the public repository: the app will show a red warning if it detects that.
     debt so paying it also lowers that debt's balance. **Print Bills List**
     makes a large-print sheet (all bills this month, or just those due before
     the next payday) with a box to tick off by hand — handy for the fridge.
-- **Log** — every transaction, income or expense.
+- **Log** — every transaction, income or expense. Type in the **Search** box
+  (a store, a category, a date or an amount) to find matches across all months,
+  with what they add up to.
 - **Debt** — each debt's balance and progress, with a "focus this one first"
   suggestion (*Snowball*: smallest first, or *Avalanche*: highest interest first).
+  The **Debt-Free Date** card estimates when everything will be paid off, and
+  what paying a little extra each month would change.
 - **Settings** — GitHub sync, categories, passphrase, **text size** (Normal,
   Large, Extra large — per device), backups, and locking a device.
+
+## Undo
+
+Deleting a transaction, bill, debt, category or paycheck shows **Undo** for a few
+seconds. While it's showing, the deletion isn't sent to GitHub yet, so Undo puts
+everything back — including a debt's balance — on every device.
 
 ## Using it with no internet
 
@@ -86,8 +97,9 @@ needs the access token.
      (just that one).
    - *Permissions → Repository permissions → **Contents: Read and write***.
      (*Metadata: Read-only* is added automatically; leave everything else off.)
-   - Pick an expiration (90 days works well) and **write the expiry date
-     down** — you'll give it to the app so it can remind you.
+   - Pick the **longest expiration GitHub offers (1 year)** so there's only one
+     renewal a year, and **write the expiry date down** — you'll give it to the
+     app so it can remind you.
    - Generate it and copy it right away; GitHub shows it only once.
 4. **Open the website** and choose a passphrase. Then open *"First time on this
    device? Connect to GitHub"* and enter your GitHub username, the data
@@ -144,7 +156,8 @@ remembered so a deleted item doesn't come back.
 - Run the automated checks (Node 20+, nothing to install): `node tests/run-tests.js`.
   They cover the budget and pay-period math (including evenings and daylight
   saving), regular paychecks (every frequency, no duplicates across devices),
-  the month-by-month figures, the printable list, the sync merge logic,
+  the month-by-month figures, the printable list, undo, the debt-free
+  projection, Log search, the sync merge logic,
   backup/restore, the offline service worker, bill and debt linking, and color
   contrast in light and dark mode.
 - Deploying is just pushing to `master`; GitHub Pages publishes it in about a

@@ -14,6 +14,9 @@ const state = {
   editSeq: 0,
   billSort: getBillSort(),
   historyMonths: 6,
+  txnQuery: "",
+  extraDebtPayment: 0,
+  syncHoldUntil: 0, // while an Undo is on offer, nothing is sent to GitHub
   repoPublic: null, // true when the GitHub repository holding the budget is public
 };
 
@@ -52,6 +55,45 @@ function showToast(msg) {
   el.textContent = msg;
   root.appendChild(el);
   setTimeout(() => el.remove(), 2600);
+}
+
+const UNDO_WINDOW_MS = 8000;
+
+// A message with an Undo button. Only one is offered at a time.
+function showUndoToast(msg, onUndo) {
+  const root = byId("toast-root");
+  root.querySelectorAll(".toast-undo").forEach((t) => t.remove());
+  const el = document.createElement("div");
+  el.className = "toast toast-undo";
+  const text = document.createElement("span");
+  text.textContent = msg;
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "toast-btn";
+  btn.textContent = "Undo";
+  el.append(text, btn);
+  root.appendChild(el);
+  const timer = setTimeout(() => el.remove(), UNDO_WINDOW_MS);
+  btn.addEventListener("click", () => {
+    clearTimeout(timer);
+    el.remove();
+    onUndo();
+  });
+}
+
+// Deletes, then offers Undo for a few seconds. Syncing is held back for that
+// long: once a deletion reaches GitHub it is permanent on every device, so
+// until then it can still be taken back cleanly.
+function deleteWithUndo(message, fn) {
+  const before = snapshotForUndo(state.data);
+  state.syncHoldUntil = Date.now() + UNDO_WINDOW_MS + 1000;
+  mutateData(fn);
+  const after = snapshotForUndo(state.data);
+  showUndoToast(message, () => {
+    state.syncHoldUntil = 0;
+    mutateData((d) => undoDelete(d, before, after));
+    showToast("Put back");
+  });
 }
 
 function openModal(html) {
@@ -125,7 +167,7 @@ function scheduleSync() {
         setSyncStatus("error", describeSyncError(retryErr));
       }
     }
-  }, 1200);
+  }, Math.max(1200, state.syncHoldUntil - Date.now()));
 }
 
 async function pullAndMergeSilently() {
@@ -241,6 +283,12 @@ function wireApp() {
   });
   byId("view-container").addEventListener("click", handleViewClick);
   byId("view-container").addEventListener("change", handleViewChange);
+  byId("view-container").addEventListener("input", (e) => {
+    if (e.target.id !== "txn-search") return;
+    state.txnQuery = e.target.value;
+    byId("txn-results").innerHTML = renderTransactionResults();
+    byId("txn-search-clear").classList.toggle("hidden", !state.txnQuery);
+  });
   byId("modal-root").addEventListener("click", (e) => {
     if (e.target.closest('[data-action="modal-cancel"]')) closeModal();
   });
@@ -267,6 +315,7 @@ function handleViewClick(e) {
     case "edit-debt": openDebtModal(state.data.debts.find((d) => d.id === btn.dataset.id)); break;
     case "log-payment": openLogPaymentModal(state.data.debts.find((d) => d.id === btn.dataset.id)); break;
     case "open-pay-schedule": openPayScheduleModal(); break;
+    case "clear-search": state.txnQuery = ""; render(); byId("txn-search").focus(); break;
     case "open-add-paycheck": openPaycheckModal(null); break;
     case "edit-paycheck": openPaycheckModal(state.data.recurringIncome.find((p) => p.id === btn.dataset.id)); break;
     case "open-month": state.month = btn.dataset.month; render(); window.scrollTo(0, 0); break;
@@ -277,9 +326,8 @@ function handleViewClick(e) {
     case "mark-bill-paid": openMarkBillPaidModal(state.data.bills.find((b) => b.id === btn.dataset.id), btn.dataset.due); break;
     case "undo-bill-payment":
       confirmAction("Remove this payment record?", () => {
-        mutateData((d) => { removeTransaction(d, btn.dataset.txnId); });
+        deleteWithUndo("Payment removed", (d) => { removeTransaction(d, btn.dataset.txnId); });
         closeModal();
-        showToast("Payment removed");
       });
       break;
     case "set-strategy": state.debtStrategy = btn.dataset.strategy; render(); break;
@@ -310,6 +358,10 @@ function handleViewChange(e) {
     // their place after every amount. Wait for focus to land on the next
     // field, redraw, then put focus back on that same field.
     setTimeout(renderKeepingFocus, 0);
+  }
+  if (el.id === "extra-debt-select") {
+    state.extraDebtPayment = Number(el.value) || 0;
+    renderKeepingFocus();
   }
   if (el.id === "bill-sort-select") {
     state.billSort = el.value;
@@ -412,6 +464,7 @@ function renderDashboard() {
   const anySpending = amounts.some((a) => a > 0);
 
   return `
+    ${renderComingUpCard()}
     <div class="month-nav">
       <button class="btn btn-icon" data-action="month-prev" aria-label="Previous month">←</button>
       <div class="month-label">${formatMonthLabel(state.month)}</div>
@@ -430,6 +483,31 @@ function renderDashboard() {
     ${renderHistoryCard()}
     <button class="btn btn-primary btn-large" data-action="open-add-transaction">+ Add a Transaction</button>
   `;
+}
+
+// Bills due in the next week that haven't been paid, with a Mark Paid button.
+function renderComingUpCard() {
+  if (!state.data.bills.some((b) => b.dueDay)) return "";
+  const today = new Date();
+  const soon = billsComingUp(state.data.bills, state.data.transactions, today, 7);
+  const unpaid = soon.filter((x) => !x.paid);
+  const paidCount = soon.length - unpaid.length;
+  const total = roundCents(unpaid.reduce((sum, { bill }) => sum + Number(bill.amount || 0), 0));
+  const rows = unpaid.map(({ bill, date }) => `
+    <div class="bill-item">
+      <div class="bill-main">
+        <div class="bill-name">${escapeHtml(bill.name)}</div>
+        <div class="bill-meta"><strong>${dayLabel(date, today)}</strong> • ${formatMoney(bill.amount)}</div>
+      </div>
+      <button class="btn btn-primary" data-action="mark-bill-paid" data-id="${bill.id}" data-due="${toLocalISODate(date)}">Mark Paid</button>
+    </div>`).join("");
+  return `
+    <div class="card coming-up">
+      <h2>⏰ Coming Up — Next 7 Days</h2>
+      ${unpaid.length ? rows : `<p class="help-text">${soon.length ? "Everything due this week is paid ✓" : "No bills are due in the next 7 days."}</p>`}
+      ${unpaid.length ? `<div class="budget-total-row"><span>Still to pay</span><span>${formatMoney(total)}</span></div>` : ""}
+      ${unpaid.length && paidCount ? `<p class="help-text">${paidCount} more already paid ✓</p>` : ""}
+    </div>`;
 }
 
 // Income, spending and what was left for each recent month, newest first.
@@ -622,10 +700,14 @@ function renderBillsSection() {
   `;
 }
 
-function renderTransactions() {
-  const list = state.data.transactions
-    .filter((t) => (state.txnShowAll ? true : monthKeyOf(t.date) === state.month))
-    .sort((a, b) => (a.date < b.date ? 1 : -1));
+// The month navigator plus the list of transactions (or the search results).
+function renderTransactionResults() {
+  const query = state.txnQuery.trim();
+  const list = query
+    ? searchTransactions(state.data.transactions, state.data.categories, query)
+    : state.data.transactions
+        .filter((t) => (state.txnShowAll ? true : monthKeyOf(t.date) === state.month))
+        .sort((a, b) => (a.date < b.date ? 1 : -1));
 
   const rows = list.map((t) => {
     const cat = getCategory(t.categoryId);
@@ -643,6 +725,15 @@ function renderTransactions() {
       </div>`;
   }).join("");
 
+  if (query) {
+    const spent = sumTransactions(list, { type: "expense" });
+    const got = sumTransactions(list, { type: "income" });
+    return `
+      <p class="search-summary"><strong>${list.length} match${list.length === 1 ? "" : "es"}</strong> in all months${spent ? ` • Spent ${formatMoney(spent)}` : ""}${got ? ` • Received ${formatMoney(got)}` : ""}</p>
+      <div class="card">
+        ${list.length ? rows : '<p class="empty-state">Nothing matches. Try fewer or different words.</p>'}
+      </div>`;
+  }
   return `
     <div class="month-nav">
       <button class="btn btn-icon" data-action="month-prev" aria-label="Previous month" ${state.txnShowAll ? "disabled" : ""}>←</button>
@@ -654,7 +745,17 @@ function renderTransactions() {
     </div>
     <div class="card">
       ${list.length ? rows : '<p class="empty-state">No transactions yet.</p>'}
+    </div>`;
+}
+
+function renderTransactions() {
+  return `
+    <div class="search-box">
+      <label for="txn-search" class="search-label">🔍 Search</label>
+      <input type="search" id="txn-search" value="${escapeHtml(state.txnQuery)}" placeholder="Store, category, date or amount" autocomplete="off" enterkeyhint="search">
+      <button class="btn btn-link ${state.txnQuery ? "" : "hidden"}" id="txn-search-clear" data-action="clear-search">Clear</button>
     </div>
+    <div id="txn-results">${renderTransactionResults()}</div>
     <button class="btn btn-primary btn-large" data-action="open-add-transaction">+ Add a Transaction</button>
   `;
 }
@@ -694,9 +795,38 @@ function renderDebts() {
       <button class="btn ${state.debtStrategy === "snowball" ? "active" : ""}" data-action="set-strategy" data-strategy="snowball">Snowball (smallest first)</button>
       <button class="btn ${state.debtStrategy === "avalanche" ? "active" : ""}" data-action="set-strategy" data-strategy="avalanche">Avalanche (highest interest first)</button>
     </div>
+    ${renderDebtFreeCard()}
     ${ordered.length ? cards : '<p class="empty-state">No debts added yet. Add one to start tracking payoff progress.</p>'}
     <button class="btn btn-primary btn-large" data-action="open-add-debt">+ Add a Debt</button>
   `;
+}
+
+// When everything will be paid off, and what a little extra each month would change.
+function renderDebtFreeCard() {
+  if (!state.data.debts.some((d) => Number(d.currentBalance) > 0)) return "";
+  const today = new Date();
+  const strategyName = state.debtStrategy === "avalanche" ? "Avalanche" : "Snowball";
+  const base = simulatePayoff(state.data.debts, state.debtStrategy, 0);
+  if (base.error) return `<div class="card"><h2>🎯 Debt-Free Date</h2><p class="help-text">${escapeHtml(base.error)}</p></div>`;
+  const extra = Number(state.extraDebtPayment) || 0;
+  const withExtra = extra > 0 ? simulatePayoff(state.data.debts, state.debtStrategy, extra) : null;
+  const years = (m) => (m >= 24 ? `about ${Math.round(m / 12)} years` : `${m} month${m === 1 ? "" : "s"}`);
+  const saving = withExtra && !withExtra.error && withExtra.months <= base.months
+    ? `<p><strong>${monthsFromNowLabel(today, withExtra.months)}</strong> with an extra ${formatMoney(extra)} a month — ${base.months - withExtra.months > 0 ? `${years(base.months - withExtra.months)} sooner and ` : ""}${formatMoney(Math.max(0, base.interest - withExtra.interest))} less interest.</p>`
+    : "";
+  return `
+    <div class="card">
+      <h2>🎯 Debt-Free Date</h2>
+      <div class="debt-free-date">${monthsFromNowLabel(today, base.months)}</div>
+      <p class="help-text">About ${years(base.months)} from now if you keep making each payment and put what a paid-off debt frees up toward the next one (${strategyName}). Interest along the way: about ${formatMoney(base.interest)}.</p>
+      <div class="form-group">
+        <label for="extra-debt-select">What if you paid extra each month?</label>
+        <select id="extra-debt-select" data-focus-key="extra-debt">
+          ${[0, 25, 50, 100, 200].map((n) => `<option value="${n}" ${extra === n ? "selected" : ""}>${n === 0 ? "No extra" : "+ " + formatMoney(n) + " a month"}</option>`).join("")}
+        </select>
+      </div>
+      ${saving}
+    </div>`;
 }
 
 function renderSettings() {
@@ -735,6 +865,7 @@ function renderSettings() {
         <input type="date" id="set-gh-expires" value="${gh && gh.tokenExpires ? escapeHtml(gh.tokenExpires) : ""}">
         <p class="help-text">GitHub shows this date when you make the token. We'll remind you two weeks before it runs out.</p>
       </div>
+      ${gh && !gh.tokenExpires ? '<p class="help-text">No expiry date entered, so there will be no reminder before the token runs out.</p>' : ""}
       <div style="display:flex; gap:10px; flex-wrap:wrap;">
         <button class="btn btn-primary" data-action="save-github-config">Save &amp; Connect</button>
         ${statusOk ? '<button class="btn" data-action="sync-now">Sync Now</button>' : ""}
@@ -862,9 +993,8 @@ function openTransactionModal(existing) {
   if (isEdit) {
     byId("txn-delete-btn").addEventListener("click", () => {
       confirmAction("Delete this transaction?", () => {
-        mutateData((d) => { removeTransaction(d, txn.id); }); // also gives a debt payment back to its balance
+        deleteWithUndo("Transaction deleted", (d) => { removeTransaction(d, txn.id); }); // also gives a debt payment back to its balance
         closeModal();
-        showToast("Transaction deleted");
       });
     });
   }
@@ -942,12 +1072,11 @@ function openCategoryModal(existing) {
         ? `Some transactions use "${cat.name}". Deleting it won't remove those transactions, but they'll show as uncategorized. Continue?`
         : `Delete the "${cat.name}" category?`;
       confirmAction(msg, () => {
-        mutateData((d) => {
+        deleteWithUndo("Category deleted", (d) => {
           d.categories = d.categories.filter((c) => c.id !== cat.id);
           d.tombstones.push(`category:${cat.id}`);
         });
         closeModal();
-        showToast("Category deleted");
       });
     });
   }
@@ -1028,12 +1157,11 @@ function openDebtModal(existing) {
   if (isEdit) {
     byId("debt-delete-btn").addEventListener("click", () => {
       confirmAction(`Delete "${debt.name}"? This won't delete past transactions.`, () => {
-        mutateData((d) => {
+        deleteWithUndo("Debt deleted", (d) => {
           d.debts = d.debts.filter((x) => x.id !== debt.id);
           d.tombstones.push(`debt:${debt.id}`);
         });
         closeModal();
-        showToast("Debt deleted");
       });
     });
   }
@@ -1203,12 +1331,11 @@ function openPaycheckModal(existing) {
   if (isEdit) {
     byId("paycheck-delete-btn").addEventListener("click", () => {
       confirmAction(`Delete "${pay.name}"? Paychecks already in your Log stay there.`, () => {
-        mutateData((d) => {
+        deleteWithUndo("Paycheck deleted", (d) => {
           d.recurringIncome = d.recurringIncome.filter((p) => p.id !== pay.id);
           d.tombstones.push(`paycheck:${pay.id}`);
         });
         closeModal();
-        showToast("Paycheck deleted");
       });
     });
   }
@@ -1331,12 +1458,11 @@ function openBillModal(existing) {
   if (isEdit) {
     byId("bill-delete-btn").addEventListener("click", () => {
       confirmAction(`Delete "${bill.name}"? This won't delete payments you've already logged.`, () => {
-        mutateData((d) => {
+        deleteWithUndo("Bill deleted", (d) => {
           d.bills = d.bills.filter((b) => b.id !== bill.id);
           d.tombstones.push(`bill:${bill.id}`);
         });
         closeModal();
-        showToast("Bill deleted");
       });
     });
   }

@@ -479,3 +479,129 @@ function billsSheet(data, mode, today) {
   }));
   return { title: `Bills for ${formatMonthLabel(monthKey)}`, subtitle: "Due on this day of each month", rows, total: sum(rows), skipped: [] };
 }
+
+/* ---------- Coming up (bills due soon) ---------- */
+
+/**
+ * Every bill falling due from today through `days` days ahead, paid or not
+ * ("paid" means a payment was logged in the month the bill falls due).
+ */
+function billsComingUp(bills, transactions, today, days = 7) {
+  const start = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const end = addDays(start, days + 1);
+  const out = [];
+  bills.filter((b) => b.dueDay).forEach((bill) => {
+    billDueDatesInRange(bill.dueDay, start, end).forEach((date) => {
+      out.push({ bill, date, paid: findBillPayment(transactions, bill.id, toLocalISODate(date).slice(0, 7)) || null });
+    });
+  });
+  return out.sort((a, b) => a.date - b.date || String(a.bill.name).localeCompare(String(b.bill.name)));
+}
+
+/** "Today", "Tomorrow", or "Fri, Oct 16". */
+function dayLabel(date, today) {
+  const diff = Math.round((Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()) - Date.UTC(today.getFullYear(), today.getMonth(), today.getDate())) / 86400000);
+  if (diff === 0) return "Today";
+  if (diff === 1) return "Tomorrow";
+  return date.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+}
+
+/* ---------- Undo for deletions ---------- */
+
+const UNDO_COLLECTIONS = ["transactions", "bills", "debts", "categories", "recurringIncome"];
+
+/** A copy of everything a deletion can touch, to compare before and after. */
+function snapshotForUndo(data) {
+  const snap = { tombstones: [...(data.tombstones || [])] };
+  UNDO_COLLECTIONS.forEach((name) => { snap[name] = JSON.parse(JSON.stringify(data[name] || [])); });
+  return snap;
+}
+
+/**
+ * Reverses one deletion. `before` / `after` are snapshots taken just before and
+ * just after it. Puts back what it removed, takes back the delete-markers it
+ * added, and restores any debt balance it changed (deleting a debt payment
+ * gives money back to the debt). Anything done since is left alone.
+ */
+function undoDelete(data, before, after) {
+  UNDO_COLLECTIONS.forEach((name) => {
+    const present = new Set((data[name] || []).map((r) => r.id));
+    const removedByDelete = (id) => !after[name].some((r) => r.id === id);
+    before[name].forEach((record) => {
+      if (!present.has(record.id) && removedByDelete(record.id)) data[name].push(record);
+    });
+  });
+  const added = new Set(after.tombstones.filter((t) => !before.tombstones.includes(t)));
+  data.tombstones = (data.tombstones || []).filter((t) => !added.has(t));
+  data.debts.forEach((debt) => {
+    const was = before.debts.find((d) => d.id === debt.id);
+    const then = after.debts.find((d) => d.id === debt.id);
+    if (was && then && was.currentBalance !== then.currentBalance && debt.currentBalance === then.currentBalance) {
+      debt.currentBalance = was.currentBalance;
+    }
+  });
+}
+
+/* ---------- Debt-free date ---------- */
+
+/**
+ * Month-by-month payoff of every debt. Each month interest is added, every
+ * debt gets its usual payment, and everything left in the pot (money freed up
+ * by finished debts, plus `extra`) goes to the debt the strategy says to
+ * focus on. Returns { months, interest } or { error }.
+ */
+function simulatePayoff(debts, strategy, extra = 0) {
+  const live = debts
+    .filter((d) => Number(d.currentBalance) > 0)
+    .map((d) => ({ name: d.name, bal: Number(d.currentBalance), rate: (Number(d.interestRate) || 0) / 1200, min: Number(d.minPayment) || 0 }));
+  if (!live.length) return { months: 0, interest: 0 };
+  const missing = live.find((d) => d.min <= 0);
+  if (missing) return { error: `Add a monthly payment for ${missing.name} to estimate when you'll be debt-free.` };
+  const pot = live.reduce((sum, d) => sum + d.min, 0) + Math.max(0, Number(extra) || 0);
+  let interest = 0;
+  for (let month = 1; month <= 1200; month++) {
+    live.forEach((d) => {
+      if (d.bal <= 0) return;
+      const charge = d.bal * d.rate;
+      d.bal += charge;
+      interest += charge;
+    });
+    let left = pot;
+    live.forEach((d) => {
+      if (d.bal <= 0) return;
+      const pay = Math.min(d.min, d.bal);
+      d.bal -= pay;
+      left -= pay;
+    });
+    const order = live
+      .filter((d) => d.bal > 0.005)
+      .sort(strategy === "avalanche" ? (a, b) => b.rate - a.rate : (a, b) => a.bal - b.bal);
+    for (const d of order) {
+      if (left <= 0) break;
+      const pay = Math.min(left, d.bal);
+      d.bal -= pay;
+      left -= pay;
+    }
+    if (live.every((d) => d.bal <= 0.005)) return { months: month, interest: roundCents(interest) };
+  }
+  return { error: "At the current payments some debts never get paid off. Raise a payment (or add extra) to see a date." };
+}
+
+/** "March 2029", counting `months` from today. */
+function monthsFromNowLabel(today, months) {
+  const d = new Date(today.getFullYear(), today.getMonth() + months, 1);
+  return d.toLocaleDateString("en-US", { month: "long", year: "numeric" });
+}
+
+/* ---------- Searching the Log ---------- */
+
+/** Transactions matching every word typed (description, category, date or amount), newest first. */
+function searchTransactions(transactions, categories, query) {
+  const words = String(query || "").toLowerCase().split(/\s+/).filter(Boolean);
+  const nameOf = (t) => (categories.find((c) => c.id === t.categoryId) || {}).name || "";
+  const matches = (t) => {
+    const hay = [t.description, nameOf(t), t.date, String(t.amount), formatMoney(t.amount)].join(" ").toLowerCase();
+    return words.every((w) => hay.includes(w.replace(/^\$/, "")));
+  };
+  return transactions.filter(matches).sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
+}

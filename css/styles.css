@@ -547,6 +547,35 @@ main#view-container {
   text-align: center;
 }
 
+/* ---------- Undo toast, search, coming up, debt-free ---------- */
+.toast-undo { display: flex; align-items: center; gap: 14px; padding: 6px 8px 6px 20px; }
+.toast-btn {
+  min-height: var(--touch-min);
+  padding: 8px 16px;
+  background: none;
+  border: 2px solid currentColor;
+  border-radius: var(--radius-sm);
+  color: inherit;
+  font-weight: 700;
+}
+.search-box { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; }
+.search-label { font-weight: 600; white-space: nowrap; }
+.search-box input {
+  flex: 1;
+  min-width: 0;
+  min-height: var(--touch-min);
+  padding: 8px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+.search-summary { text-align: center; margin: 4px 0 14px; }
+.coming-up { border-color: var(--color-primary); border-width: 2px; }
+.coming-up h2 { margin-bottom: 0.3em; }
+.debt-free-date { font-size: 1.8rem; font-weight: 700; color: var(--color-primary); margin-bottom: 6px; }
+#extra-debt-select { width: 100%; }
+
 /* ---------- Large-print bills list ---------- */
 .print-modes { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
 .print-modes .btn { flex: 1 1 0; }
