@@ -46,6 +46,13 @@ function defaultData() {
   };
 }
 
+// A category colour ends up in a style attribute, so only a hex colour or one of the
+// app's own colour variables is allowed through.
+function safeCategory(category) {
+  const ok = typeof category.color === "string" && /^(#[0-9a-fA-F]{3,8}|var\(--[\w-]+\))$/.test(category.color);
+  return ok ? category : { ...category, color: "var(--cat-other)" };
+}
+
 /**
  * Makes any parsed JSON safe to use: wrong-typed or missing fields fall back
  * to defaults so a damaged file or a wrong backup can't crash every screen.
@@ -60,7 +67,7 @@ function sanitizeData(raw) {
     ...src,
     version: typeof src.version === "number" ? src.version : base.version,
     passphraseHash: typeof src.passphraseHash === "string" && src.passphraseHash ? src.passphraseHash : null,
-    categories: Array.isArray(src.categories) ? records(src.categories) : base.categories,
+    categories: Array.isArray(src.categories) ? records(src.categories).map(safeCategory) : base.categories,
     transactions: records(src.transactions),
     debts: records(src.debts),
     bills: records(src.bills),
@@ -260,8 +267,19 @@ async function githubFetchFile(config) {
   if (res.status === 404) return { data: null, sha: null };
   if (!res.ok) throw githubError(`GitHub read failed (${res.status})`, res.status);
   const json = await res.json();
-  const data = JSON.parse(base64ToUtf8(json.content));
-  return { data, sha: json.sha };
+  let text;
+  if (typeof json.content === "string" && json.content && json.encoding !== "none") {
+    text = base64ToUtf8(json.content);
+  } else {
+    // GitHub leaves the content out of files over 1 MB; ask for the raw file instead.
+    const raw = await fetch(githubApiUrl(config), {
+      cache: "no-store",
+      headers: { Authorization: `Bearer ${config.token}`, Accept: "application/vnd.github.raw+json" },
+    });
+    if (!raw.ok) throw githubError(`GitHub read failed (${raw.status})`, raw.status);
+    text = await raw.text();
+  }
+  return { data: JSON.parse(text), sha: json.sha };
 }
 
 /**

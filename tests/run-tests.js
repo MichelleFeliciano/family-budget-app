@@ -1160,3 +1160,91 @@ test("spreadsheet export: the years offered come from the data", () => {
     assert.ok(app.includes(needle), `app.js is missing ${needle}`);
   assert.equal((app.match(/URL\.createObjectURL/g) || []).length, 1, "one shared download helper");
 });
+
+/* ------------------------------------------------------------------ */
+test("safety: saved text and ids are escaped before they go into a page attribute", () => {
+  const app = read("js/app.js");
+  const allowed = new Set(["CSS.escape(key)", "pct", "toLocalISODate(dueDate)", "r.monthKey", "Math.round((r.expenses / maxSpent) * 100)", "toLocalISODate(date)", "dueHere", "v", "n", "y", "c", "todayISO()", "value", "i + 1"]);
+  const unescaped = new Set();
+  for (const m of app.matchAll(/(data-[\w-]+|value|style)="([^"]*)"/g))
+    for (const e of m[2].matchAll(/\$\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}/g))
+      if (!/escapeHtml\(/.test(e[1]) && !allowed.has(e[1])) unescaped.add(`${m[1]}="${e[1]}"`);
+  assert.deepEqual([...unescaped], [], "these saved values reach an attribute without escapeHtml");
+});
+
+test("safety: a category colour from a file or backup can't carry anything but a colour", () => {
+  const colourOf = (color) => sanitizeData({ categories: [{ id: "c", name: "x", type: "expense", color }], transactions: [] }).categories[0].color;
+  for (const good of ["#abc", "#3f6b58", "#3f6b58ff", "var(--cat-food)", "var(--cat-other)"]) assert.equal(colourOf(good), good);
+  for (const bad of ['red"; onmouseover="x', "red; background:url(//evil)", "url(x)", "var(--a) var(--b)", 'var(--x)"', "", null, 7, undefined, "#12"]) assert.equal(colourOf(bad), "var(--cat-other)", `rejected: ${bad}`);
+  assert.equal(validateBackup(JSON.stringify({ categories: [{ id: "c", color: 'x"y' }], transactions: [] })).categories[0].color, "var(--cat-other)", "backups too");
+  assert.equal(mergeData(mk(), mk({ categories: [{ id: "c", name: "x", type: "expense", color: "javascript:1" }], lastUpdated: "2026-05-01T00:00:00.000Z" })).categories.find((c) => c.id === "c").color, "var(--cat-other)", "and what comes from GitHub");
+});
+
+test("bug fixes from the code review are in place", () => {
+  const app = read("js/app.js");
+  assert.match(app, /delete updated\.debtId/, "turning a debt payment into income gives the debt its money back");
+  assert.match(app, /Math\.max\(0, Math\.min\(100, Math\.round\(\(1 - d\.currentBalance \/ d\.originalBalance\)/, "debt progress can't go below 0%");
+  assert.match(app, /a\.date > b\.date \? -1 : 0/, "equal dates compare equal");
+  assert.match(app, /data-id="\$\{escapeHtml\(b\.id\)\}" data-due="\$\{dueHere\}"/, "Mark Paid in the Bills list dates the payment in the month on screen");
+  assert.match(app, /No bills are due this month\./, "an empty month list doesn't talk about pay periods");
+  assert.equal((app.match(/setDirty\(true\);\s*(\/\/[^\n]*\n\s*)?scheduleSync\(\)/g) || []).length >= 2, true, "connecting uploads what the device already had (both connect forms)");
+});
+
+test("an expense turned into income no longer lowers the debt it was paying", () => {
+  const data = mk({ debts: [{ id: "d", name: "Visa", currentBalance: 1000 }], bills: [{ id: "b", name: "Visa", debtId: "d", categoryId: "debt" }] });
+  recordBillPayment(data, data.bills[0], "2026-10-05", 100, "p");
+  assert.equal(data.debts[0].currentBalance, 900);
+  // what the Log's edit form does when the type is switched to Income
+  const edited = { ...data.transactions[0], type: "income" };
+  delete edited.billId; delete edited.goalId; delete edited.paycheckId; delete edited.debtId;
+  data.transactions[0] = adjustDebtForTransactionChange(data, data.transactions[0], edited);
+  assert.equal(data.debts[0].currentBalance, 1000, "the 100 goes back to the debt");
+  assert.equal(findBillPayment(data.transactions, "b", "2026-10"), undefined, "and it no longer counts as the bill being paid");
+});
+
+test("accessibility: every planned-amount box says which category it is for", () => {
+  assert.match(read("js/app.js"), /class="planned-input"[^>]*aria-label="Planned amount for \$\{escapeHtml\(c\.name\)\}"/);
+});
+
+/* ------------------------------------------------------------------ */
+test("money: the fast formatter gives exactly what the locale formatter did", () => {
+  const old = (amount) => { const n = roundCents(amount); return (n < 0 ? "-" : "") + "$" + Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }); };
+  let seed = 31337; const rnd = () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
+  const cases = [0, -0, 0.004, 0.005, 0.015, 1, 12, 123, 999.995, 1000, 1234.5, 999999.99, 1e6, 1234567.891, -1, -1234.567, -0.001, 1e12 + 0.01, 1e15, 2.5e15, "12.5", "abc", null, undefined, NaN, Infinity === 1 ? 0 : 5];
+  for (let i = 0; i < 20000; i++) cases.push((rnd() - 0.3) * Math.pow(10, Math.floor(rnd() * 13)));
+  for (const c of cases) assert.equal(formatMoney(c), old(c), `formatMoney(${c})`);
+});
+
+test("money: formatting 20,000 amounts is fast enough for search-as-you-type", () => {
+  const t0 = process.hrtime.bigint();
+  for (let i = 0; i < 20000; i++) formatMoney(i * 1.37);
+  assert.ok(Number(process.hrtime.bigint() - t0) / 1e6 < 250, "formatting 20,000 amounts should take well under a quarter second");
+  const txns = Array.from({ length: 20000 }, (_, i) => ({ id: "t" + i, date: "2026-03-01", categoryId: "food", description: "Store " + i, amount: i / 4 }));
+  const t1 = process.hrtime.bigint();
+  const found = searchTransactions(txns, defaultData().categories, "store 199");
+  const ms = Number(process.hrtime.bigint() - t1) / 1e6;
+  const slowHay = (t) => [t.description, "Food & Groceries", t.date, String(t.amount), "$" + Math.abs(t.amount).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })].join(" ").toLowerCase();
+  const expected = txns.filter((t) => slowHay(t).includes("store") && slowHay(t).includes("199")).length;
+  assert.ok(expected > 100, "the check itself has something to find");
+  assert.equal(found.length, expected, "same matches as the slow, obviously-correct way");
+  assert.ok(ms < 400, `one search over 20,000 transactions took ${ms.toFixed(0)} ms`);
+});
+
+test("GitHub: a data file over 1 MB (content left out by GitHub) is read from the raw copy", async () => {
+  const data = mk({ transactions: [{ id: "big", amount: 1 }] });
+  const calls = [];
+  globalThis.fetch = async (url, init) => {
+    calls.push(init.headers.Accept);
+    if (init.headers.Accept === "application/vnd.github.raw+json") return { ok: true, status: 200, text: async () => JSON.stringify(data) };
+    return { ok: true, status: 200, json: async () => ({ content: "", encoding: "none", sha: "bigsha", size: 3000000 }) };
+  };
+  const got = await githubFetchFile(cfg);
+  assert.equal(got.sha, "bigsha", "the version still comes from the first answer");
+  assert.deepEqual(got.data.transactions, [{ id: "big", amount: 1 }]);
+  assert.deepEqual(calls, ["application/vnd.github+json", "application/vnd.github.raw+json"]);
+  calls.length = 0;
+  globalThis.fetch = async (url, init) => ({ ok: true, status: 200, json: async () => ({ content: b64(data), encoding: "base64", sha: "s1" }) });
+  assert.equal((await githubFetchFile(cfg)).sha, "s1", "small files still come back in one request");
+  globalThis.fetch = async (url, init) => init.headers.Accept.includes("raw") ? { ok: false, status: 403, text: async () => "" } : { ok: true, status: 200, json: async () => ({ content: "", encoding: "none", sha: "x" }) };
+  await assert.rejects(() => githubFetchFile(cfg), (e) => e.status === 403, "a failed raw read is reported like any other read failure");
+});

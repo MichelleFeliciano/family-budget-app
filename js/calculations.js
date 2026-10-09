@@ -50,7 +50,12 @@ function formatMonthLabel(monthKey) {
 function formatMoney(amount) {
   const n = roundCents(amount); // also turns float dust like -1e-14 into 0
   const sign = n < 0 ? "-" : "";
-  return sign + "$" + Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const abs = Math.abs(n);
+  // Hand-rolled "1,234.50": toLocaleString is about 100x slower, and every screen
+  // and every search keystroke formats hundreds of amounts.
+  if (abs >= 1e15) return sign + "$" + abs.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const [whole, cents] = abs.toFixed(2).split(".");
+  return sign + "$" + whole.replace(/\B(?=(\d{3})+(?!\d))/g, ",") + "." + cents;
 }
 
 function sumTransactions(transactions, { monthKey, categoryId, type } = {}) {

@@ -44,7 +44,7 @@ function categoryOptions(type, selectedId) {
   const opts = state.data.categories.filter((c) => c.type === type);
   if (!opts.length) return '<option value="">No categories yet</option>';
   return opts
-    .map((c) => `<option value="${c.id}" ${c.id === selectedId ? "selected" : ""}>${escapeHtml(c.name)}</option>`)
+    .map((c) => `<option value="${escapeHtml(c.id)}" ${c.id === selectedId ? "selected" : ""}>${escapeHtml(c.name)}</option>`)
     .join("");
 }
 
@@ -256,6 +256,7 @@ function wireLockScreen() {
         statusEl.textContent = "Connected! This device's data was backed up to GitHub.";
       } else {
         statusEl.textContent = "Connected! " + (data.passphraseHash ? "Enter the passphrase above." : "No passphrase set yet — create one above.");
+        if (sha !== null) { setDirty(true); scheduleSync(); } // anything this device already had goes up too
       }
       updateLockScreenMode();
       if (isUnlockedOnThisDevice(state.data.passphraseHash)) showApp();
@@ -459,7 +460,7 @@ function renderDashboard() {
     const change = hasPrev ? describeChange(amt, sumTransactions(state.data.transactions, { monthKey: prevKey, categoryId: c.id, type: "expense" })) : null;
     return `<div class="bar-row">
       <div class="bar-label">${escapeHtml(c.name)}</div>
-      <div class="bar-track"><div class="bar-fill" style="width:${pct}%; background:${c.color};"></div></div>
+      <div class="bar-track"><div class="bar-fill" style="width:${pct}%; background:${escapeHtml(c.color)};"></div></div>
       <div class="bar-amount">${formatMoney(amt)}</div>
       ${change ? `<div class="bar-change">${change}</div>` : ""}
     </div>`;
@@ -512,8 +513,8 @@ function renderGoalsCard() {
         <div class="debt-progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}" aria-label="${escapeHtml(g.name)} progress"><div class="goal-fill" style="width:${pct}%;"></div></div>
         <div class="goal-meta">${formatMoney(saved)} of ${formatMoney(target)} (${pct}%)${!done && target > saved ? ` • ${formatMoney(target - saved)} to go` : ""}</div>
         <div class="debt-actions">
-          <button class="btn btn-primary" data-action="add-to-goal" data-id="${g.id}">Add Money</button>
-          <button class="btn" data-action="edit-goal" data-id="${g.id}">Edit</button>
+          <button class="btn btn-primary" data-action="add-to-goal" data-id="${escapeHtml(g.id)}">Add Money</button>
+          <button class="btn" data-action="edit-goal" data-id="${escapeHtml(g.id)}">Edit</button>
         </div>
       </div>`;
   }).join("");
@@ -540,7 +541,7 @@ function renderComingUpCard() {
         <div class="bill-name">${escapeHtml(bill.name)}</div>
         <div class="bill-meta"><strong>${label}</strong> • ${formatMoney(bill.amount)}</div>
       </div>
-      <button class="btn btn-primary" data-action="mark-bill-paid" data-id="${bill.id}" data-due="${toLocalISODate(dueDate)}">Mark Paid</button>
+      <button class="btn btn-primary" data-action="mark-bill-paid" data-id="${escapeHtml(bill.id)}" data-due="${toLocalISODate(dueDate)}">Mark Paid</button>
     </div>`;
   const lateBlock = late.length ? `
       <h3 class="overdue-title">Not marked paid yet</h3>
@@ -596,11 +597,11 @@ function renderBudget() {
     const barColor = over ? "var(--color-danger)" : pct >= 90 ? "var(--color-warning)" : c.color;
     return `
       <div class="budget-row">
-        <span class="cat-pill"><span class="cat-dot" style="background:${c.color}"></span><span>${escapeHtml(c.name)}</span></span>
-        <input type="number" min="0" step="0.01" class="planned-input" value="${planned || ""}" placeholder="0.00"
-               data-category-id="${c.id}" data-focus-key="plan:${c.id}">
+        <span class="cat-pill"><span class="cat-dot" style="background:${escapeHtml(c.color)}"></span><span>${escapeHtml(c.name)}</span></span>
+        <input type="number" min="0" step="0.01" class="planned-input" value="${escapeHtml(planned || "")}" placeholder="0.00" aria-label="Planned amount for ${escapeHtml(c.name)}"
+               data-category-id="${escapeHtml(c.id)}" data-focus-key="plan:${escapeHtml(c.id)}">
         <span class="actual-amount">${formatMoney(actual)}</span>
-        <div class="budget-track-row"><div class="bar-track"><div class="bar-fill" style="width:${pct}%; background:${barColor};"></div></div></div>
+        <div class="budget-track-row"><div class="bar-track"><div class="bar-fill" style="width:${pct}%; background:${escapeHtml(barColor)};"></div></div></div>
       </div>`;
   }).join("");
 
@@ -644,7 +645,7 @@ function renderPaychecksSection() {
           <div class="bill-name">${escapeHtml(p.name)}</div>
           <div class="bill-meta">${formatMoney(p.amount)} • ${escapeHtml(payFrequencyLabel(p.frequency))}${next ? ` • Next payday ${formatShortDate(next)}` : ""}</div>
         </div>
-        <button class="btn btn-icon" data-action="edit-paycheck" data-id="${p.id}" aria-label="Edit paycheck">✏️</button>
+        <button class="btn btn-icon" data-action="edit-paycheck" data-id="${escapeHtml(p.id)}" aria-label="Edit paycheck">✏️</button>
       </div>`;
   }).join("");
   return `
@@ -699,12 +700,12 @@ function renderPayPeriodSection() {
         <div class="bill-main">
           <div class="bill-name">${escapeHtml(bill.name)}</div>
           <div class="bill-meta">
-            <span class="cat-dot" style="background:${cat ? cat.color : "var(--cat-other)"}"></span>${cat ? escapeHtml(cat.name) : ""} • Due ${formatShortDate(date)} • ${formatMoney(bill.amount)}
+            <span class="cat-dot" style="background:${cat ? escapeHtml(cat.color) : "var(--cat-other)"}"></span>${cat ? escapeHtml(cat.name) : ""} • Due ${formatShortDate(date)} • ${formatMoney(bill.amount)}
           </div>
         </div>
         ${paid
           ? `<span class="bill-paid-badge">✓ Paid ${formatMoney(paid.amount)}</span>`
-          : `<button class="btn btn-primary" data-action="mark-bill-paid" data-id="${bill.id}" data-due="${toLocalISODate(date)}">Mark Paid</button>`}
+          : `<button class="btn btn-primary" data-action="mark-bill-paid" data-id="${escapeHtml(bill.id)}" data-due="${toLocalISODate(date)}">Mark Paid</button>`}
       </div>`;
   }).join("");
   const allPaid = result.due.length > 0 && result.remaining === 0;
@@ -732,6 +733,8 @@ function renderBillsSection() {
     const dueThisMonth = billDueInMonth(b, viewYear, viewMonth);
     const nextDue = dueThisMonth ? null : nextBillDue(b, new Date());
     const freq = billFrequencyLabel(b);
+    // The due date in the month on screen: viewing another month, Mark Paid dates the payment there, not today.
+    const dueHere = `${state.month}-${String(clampDayOfMonth(viewYear, viewMonth, Number(b.dueDay) || 1)).padStart(2, "0")}`;
     // A bill with no category (or a deleted one) counts as Bills & Utilities, so show that in the dropdown too.
     const cat = getCategory(b.categoryId) || getCategory("bills") || state.data.categories.find((c) => c.type === "expense");
     return `
@@ -740,17 +743,17 @@ function renderBillsSection() {
           <div class="bill-name">${escapeHtml(b.name)}</div>
           <div class="bill-meta">${formatMoney(b.amount)}${b.dueDay ? ` • Due on the ${ordinal(b.dueDay)}` : ""}${freq ? ` • ${escapeHtml(freq)}` : ""}</div>
           <label class="bill-cat">
-            <span class="cat-dot" style="background:${cat ? cat.color : "var(--cat-other)"}"></span>
-            <select class="bill-cat-select" data-bill-id="${b.id}" data-focus-key="bill:${b.id}" aria-label="Category for ${escapeHtml(b.name)}">${categoryOptions("expense", cat ? cat.id : "")}</select>
+            <span class="cat-dot" style="background:${cat ? escapeHtml(cat.color) : "var(--cat-other)"}"></span>
+            <select class="bill-cat-select" data-bill-id="${escapeHtml(b.id)}" data-focus-key="bill:${escapeHtml(b.id)}" aria-label="Category for ${escapeHtml(b.name)}">${categoryOptions("expense", cat ? cat.id : "")}</select>
           </label>
         </div>
         ${paidTxn
           ? `<span class="bill-paid-badge">✓ Paid ${formatMoney(paidTxn.amount)}</span>
-             <button class="btn btn-link" data-action="undo-bill-payment" data-id="${b.id}" data-txn-id="${paidTxn.id}">Undo</button>`
+             <button class="btn btn-link" data-action="undo-bill-payment" data-id="${escapeHtml(b.id)}" data-txn-id="${escapeHtml(paidTxn.id)}">Undo</button>`
           : dueThisMonth
-            ? `<button class="btn btn-primary" data-action="mark-bill-paid" data-id="${b.id}">Mark Paid</button>`
+            ? `<button class="btn btn-primary" data-action="mark-bill-paid" data-id="${escapeHtml(b.id)}" data-due="${dueHere}">Mark Paid</button>`
             : `<span class="bill-next">Not due this month${nextDue ? ` — next ${formatShortDate(nextDue)}` : ""}</span>`}
-        <button class="btn btn-icon" data-action="edit-bill" data-id="${b.id}" aria-label="Edit bill">✏️</button>
+        <button class="btn btn-icon" data-action="edit-bill" data-id="${escapeHtml(b.id)}" aria-label="Edit bill">✏️</button>
       </div>`;
   }).join("");
 
@@ -776,20 +779,20 @@ function renderTransactionResults() {
     ? searchTransactions(state.data.transactions, state.data.categories, query)
     : state.data.transactions
         .filter((t) => (state.txnShowAll ? true : monthKeyOf(t.date) === state.month))
-        .sort((a, b) => (a.date < b.date ? 1 : -1));
+        .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
 
   const rows = list.map((t) => {
     const cat = getCategory(t.categoryId);
     return `
       <div class="txn-item">
-        <span class="cat-dot" style="background:${cat ? cat.color : "var(--cat-other)"}"></span>
+        <span class="cat-dot" style="background:${cat ? escapeHtml(cat.color) : "var(--cat-other)"}"></span>
         <div class="txn-main">
           <div class="txn-desc">${escapeHtml(t.description)}</div>
           <div class="txn-meta">${escapeHtml(t.date)} • ${cat ? escapeHtml(cat.name) : "Uncategorized"}</div>
         </div>
         <div class="txn-amount ${t.type === "income" ? "income" : ""}">${t.type === "income" ? "+" : "-"}${formatMoney(t.amount)}</div>
         <div class="txn-actions">
-          <button class="btn btn-icon" data-action="edit-transaction" data-id="${t.id}" aria-label="Edit transaction">✏️</button>
+          <button class="btn btn-icon" data-action="edit-transaction" data-id="${escapeHtml(t.id)}" aria-label="Edit transaction">✏️</button>
         </div>
       </div>`;
   }).join("");
@@ -835,7 +838,7 @@ function renderDebts() {
   const focusId = firstActive ? firstActive.id : null;
 
   const cards = ordered.map((d) => {
-    const pct = d.originalBalance > 0 ? Math.min(100, Math.round((1 - d.currentBalance / d.originalBalance) * 100)) : 0;
+    const pct = d.originalBalance > 0 ? Math.max(0, Math.min(100, Math.round((1 - d.currentBalance / d.originalBalance) * 100))) : 0;
     const est = estimateMonthsToPayoff(d.currentBalance, d.interestRate, d.minPayment);
     const isFocus = d.id === focusId;
     const paidOff = Number(d.currentBalance) <= 0;
@@ -853,8 +856,8 @@ function renderDebts() {
         </div>
         <p class="help-text">${est.error ? est.error : paidOff ? "Paid off — nice work." : `About ${est.months} month${est.months === 1 ? "" : "s"} left at this payment.`}</p>
         <div class="debt-actions">
-          <button class="btn btn-primary" data-action="log-payment" data-id="${d.id}">Log Payment</button>
-          <button class="btn" data-action="edit-debt" data-id="${d.id}">Edit</button>
+          <button class="btn btn-primary" data-action="log-payment" data-id="${escapeHtml(d.id)}">Log Payment</button>
+          <button class="btn" data-action="edit-debt" data-id="${escapeHtml(d.id)}">Edit</button>
         </div>
       </div>`;
   }).join("");
@@ -901,9 +904,9 @@ function renderDebtFreeCard() {
 function renderSettings() {
   const cats = state.data.categories.map((c) => `
     <div class="category-list-item">
-      <span class="color-swatch" style="background:${c.color}"></span>
+      <span class="color-swatch" style="background:${escapeHtml(c.color)}"></span>
       <span class="cat-name">${escapeHtml(c.name)} <span class="help-text">(${c.type})</span></span>
-      <button class="btn btn-icon" data-action="edit-category" data-id="${c.id}" aria-label="Edit category">✏️</button>
+      <button class="btn btn-icon" data-action="edit-category" data-id="${escapeHtml(c.id)}" aria-label="Edit category">✏️</button>
     </div>`).join("");
 
   const gh = state.githubConfig;
@@ -958,7 +961,7 @@ function renderSettings() {
       <div style="display:flex; gap:10px; flex-wrap:wrap;">
         <button class="btn" data-action="export-data">Download Backup</button>
         <button class="btn" data-action="trigger-import">Restore from Backup</button>
-        <input type="file" id="import-file-input" accept="application/json" class="hidden">
+        <input type="file" id="import-file-input" accept="application/json" class="hidden" aria-label="Choose a backup file">
       </div>
     </div>
 
@@ -1015,7 +1018,7 @@ function openTransactionModal(existing) {
       </div>
       <div class="form-group">
         <label for="txn-date">Date</label>
-        <input type="date" id="txn-date" value="${txn.date}" required>
+        <input type="date" id="txn-date" value="${escapeHtml(txn.date)}" required>
       </div>
       <div class="form-group">
         <label for="txn-desc">Description</label>
@@ -1023,7 +1026,7 @@ function openTransactionModal(existing) {
       </div>
       <div class="form-group">
         <label for="txn-amount">Amount</label>
-        <input type="number" id="txn-amount" min="0" step="0.01" value="${txn.amount || ""}" placeholder="0.00" required>
+        <input type="number" id="txn-amount" min="0" step="0.01" value="${escapeHtml(txn.amount || "")}" placeholder="0.00" required>
       </div>
       <div class="modal-actions">
         <button type="button" class="btn" data-action="modal-cancel">Cancel</button>
@@ -1061,8 +1064,9 @@ function openTransactionModal(existing) {
       amount: Math.abs(Number(byId("txn-amount").value) || 0),
       debtId: isEdit ? txn.debtId : undefined,
     };
-    // A bill payment or savings entry is an expense; if it was turned into income it's no longer one.
-    if (isEdit && txn.type !== currentType) { delete updated.billId; delete updated.goalId; delete updated.paycheckId; }
+    // A bill payment, savings entry or debt payment is an expense; if it was turned into income it's no longer one
+    // (and the debt gets its money back).
+    if (isEdit && txn.type !== currentType) { delete updated.billId; delete updated.goalId; delete updated.paycheckId; delete updated.debtId; }
     mutateData((d) => {
       if (isEdit) {
         const idx = d.transactions.findIndex((t) => t.id === txn.id);
@@ -1112,7 +1116,7 @@ function openCategoryModal(existing) {
         <div class="swatch-picker">
           ${colorOptions.map((c) => `<button type="button" class="color-swatch${c === cat.color ? " selected" : ""}" data-color="${c}" style="background:${c};" aria-label="Choose this color" aria-pressed="${c === cat.color}"></button>`).join("")}
         </div>
-        <input type="hidden" id="cat-color" value="${cat.color}">
+        <input type="hidden" id="cat-color" value="${escapeHtml(cat.color)}">
       </div>
       <div class="modal-actions">
         <button type="button" class="btn" data-action="modal-cancel">Cancel</button>
@@ -1193,21 +1197,21 @@ function openDebtModal(existing) {
       <div class="form-row">
         <div class="form-group">
           <label for="debt-original">Starting Balance</label>
-          <input type="number" id="debt-original" min="0" step="0.01" value="${debt.originalBalance}" required>
+          <input type="number" id="debt-original" min="0" step="0.01" value="${escapeHtml(debt.originalBalance)}" required>
         </div>
         <div class="form-group">
           <label for="debt-current">Balance Owed Now</label>
-          <input type="number" id="debt-current" min="0" step="0.01" value="${debt.currentBalance}" required>
+          <input type="number" id="debt-current" min="0" step="0.01" value="${escapeHtml(debt.currentBalance)}" required>
         </div>
       </div>
       <div class="form-row">
         <div class="form-group">
           <label for="debt-rate">Interest Rate % (optional)</label>
-          <input type="number" id="debt-rate" min="0" step="0.01" value="${debt.interestRate}">
+          <input type="number" id="debt-rate" min="0" step="0.01" value="${escapeHtml(debt.interestRate)}">
         </div>
         <div class="form-group">
           <label for="debt-min">Monthly Payment</label>
-          <input type="number" id="debt-min" min="0" step="0.01" value="${debt.minPayment}" required>
+          <input type="number" id="debt-min" min="0" step="0.01" value="${escapeHtml(debt.minPayment)}" required>
         </div>
       </div>
       <div class="modal-actions">
@@ -1264,7 +1268,7 @@ function openLogPaymentModal(debt) {
       </div>
       <div class="form-group">
         <label for="pay-amount">Payment Amount</label>
-        <input type="number" id="pay-amount" min="0.01" step="0.01" value="${debt.minPayment || ""}" required>
+        <input type="number" id="pay-amount" min="0.01" step="0.01" value="${escapeHtml(debt.minPayment || "")}" required>
       </div>
       <div class="modal-actions">
         <button type="button" class="btn" data-action="modal-cancel">Cancel</button>
@@ -1308,7 +1312,7 @@ function openPayScheduleModal() {
       </div>
       <div class="form-group" id="pay-anchor-group" style="${needsAnchor(ps.frequency) ? "" : "display:none;"}">
         <label for="pay-anchor-date">A recent payday</label>
-        <input type="date" id="pay-anchor-date" value="${ps.anchorDate || todayISO()}">
+        <input type="date" id="pay-anchor-date" value="${escapeHtml(ps.anchorDate || todayISO())}">
         <p class="help-text">Any payday you actually got paid on works — we just use it to line up the schedule.</p>
       </div>
       <div class="modal-actions">
@@ -1349,11 +1353,11 @@ function openGoalModal(existing) {
       </div>
       <div class="form-group">
         <label for="goal-target">Goal amount</label>
-        <input type="number" id="goal-target" min="0.01" step="0.01" value="${goal.target}" placeholder="0.00" required>
+        <input type="number" id="goal-target" min="0.01" step="0.01" value="${escapeHtml(goal.target)}" placeholder="0.00" required>
       </div>
       <div class="form-group">
         <label for="goal-start">Already saved (optional)</label>
-        <input type="number" id="goal-start" min="0" step="0.01" value="${goal.startAmount || ""}" placeholder="0.00">
+        <input type="number" id="goal-start" min="0" step="0.01" value="${escapeHtml(goal.startAmount || "")}" placeholder="0.00">
       </div>
       <div class="modal-actions">
         <button type="button" class="btn" data-action="modal-cancel">Cancel</button>
@@ -1447,7 +1451,7 @@ function openPaycheckModal(existing) {
       </div>
       <div class="form-group">
         <label for="paycheck-amount">Amount each payday</label>
-        <input type="number" id="paycheck-amount" min="0.01" step="0.01" value="${pay.amount}" placeholder="0.00" required>
+        <input type="number" id="paycheck-amount" min="0.01" step="0.01" value="${escapeHtml(pay.amount)}" placeholder="0.00" required>
       </div>
       <div class="form-group">
         <label for="paycheck-frequency">How often?</label>
@@ -1455,7 +1459,7 @@ function openPaycheckModal(existing) {
       </div>
       <div class="form-group" id="paycheck-anchor-group" style="${frequencyNeedsAnchor(pay.frequency) ? "" : "display:none;"}">
         <label for="paycheck-anchor">Any one payday</label>
-        <input type="date" id="paycheck-anchor" value="${pay.anchorDate || todayISO()}">
+        <input type="date" id="paycheck-anchor" value="${escapeHtml(pay.anchorDate || todayISO())}">
         <p class="help-text">A past or coming payday — we use it to line up the schedule.</p>
       </div>
       <div class="form-group">
@@ -1570,7 +1574,7 @@ function renderPrintSheet(mode) {
         <thead><tr><th>Due</th><th>Bill</th><th class="num">Amount</th><th>Paid</th></tr></thead>
         <tbody>${sheet.rows.map((r) => `<tr><td>${escapeHtml(r.due)}</td><td>${escapeHtml(r.name)}</td><td class="num">${formatMoney(r.amount)}</td><td class="paid-box">${r.paid ? "✓" : ""}</td></tr>`).join("")}</tbody>
         <tfoot><tr><td></td><td>Total</td><td class="num">${formatMoney(sheet.total)}</td><td></td></tr></tfoot>
-      </table>` : '<p>No bills with a due date fall in this pay period.</p>'}
+      </table>` : `<p>${mode === "period" ? "No bills with a due date fall in this pay period." : "No bills are due this month."}</p>`}
       ${sheet.skipped.length ? `<p class="print-sub">Not shown (no due date): ${sheet.skipped.map(escapeHtml).join(", ")}</p>` : ""}
       ${sheet.notDue && sheet.notDue.length ? `<p class="print-sub">Not due this month: ${sheet.notDue.map(escapeHtml).join(", ")}</p>` : ""}
     </div>`;
@@ -1596,17 +1600,17 @@ function openBillModal(existing) {
       </div>
       ${state.data.debts.length ? `<div class="form-group">
         <label for="bill-debt">Counts toward a debt (optional)</label>
-        <select id="bill-debt"><option value="">None</option>${state.data.debts.map((d) => `<option value="${d.id}" ${d.id === bill.debtId ? "selected" : ""}>${escapeHtml(d.name)}</option>`).join("")}</select>
+        <select id="bill-debt"><option value="">None</option>${state.data.debts.map((d) => `<option value="${escapeHtml(d.id)}" ${d.id === bill.debtId ? "selected" : ""}>${escapeHtml(d.name)}</option>`).join("")}</select>
         <p class="help-text">Marking this bill paid will also lower that debt's balance by the same amount.</p>
       </div>` : ""}
       <div class="form-row">
         <div class="form-group">
           <label for="bill-amount">Usual Amount</label>
-          <input type="number" id="bill-amount" min="0" step="0.01" value="${bill.amount}" required>
+          <input type="number" id="bill-amount" min="0" step="0.01" value="${escapeHtml(bill.amount)}" required>
         </div>
         <div class="form-group">
           <label for="bill-due-day" id="bill-due-day-label">${frequency === "monthly" ? "Due Day (optional)" : "Due Day"}</label>
-          <input type="number" id="bill-due-day" min="1" max="31" value="${bill.dueDay || ""}" placeholder="e.g. 15" ${frequency === "monthly" ? "" : "required"}>
+          <input type="number" id="bill-due-day" min="1" max="31" value="${escapeHtml(bill.dueDay || "")}" placeholder="e.g. 15" ${frequency === "monthly" ? "" : "required"}>
         </div>
       </div>
       <div class="form-group">
@@ -1686,11 +1690,11 @@ function openMarkBillPaidModal(bill, dueISO) {
     <form id="bill-pay-form">
       <div class="form-group">
         <label for="bill-pay-date">Date</label>
-        <input type="date" id="bill-pay-date" value="${defaultDate}" required>
+        <input type="date" id="bill-pay-date" value="${escapeHtml(defaultDate)}" required>
       </div>
       <div class="form-group">
         <label for="bill-pay-amount">Amount</label>
-        <input type="number" id="bill-pay-amount" min="0.01" step="0.01" value="${bill.amount || ""}" required>
+        <input type="number" id="bill-pay-amount" min="0.01" step="0.01" value="${escapeHtml(bill.amount || "")}" required>
       </div>
       ${showLast ? `<p class="help-text">Last paid ${formatMoney(last.amount)} on ${shortISODate(last.date)}. <button type="button" class="btn btn-link" id="bill-pay-use-last">Use that amount</button></p>` : ""}
       ${linkedDebt ? `<p class="help-text">This also lowers the <strong>${escapeHtml(linkedDebt.name)}</strong> balance by the same amount.</p>` : ""}
@@ -1786,6 +1790,8 @@ async function handleSaveGithubConfig() {
       showToast("Connected to GitHub — this device's data was backed up");
     } else {
       showToast("Connected to GitHub");
+      setDirty(true);
+      scheduleSync(); // anything this device already had goes up too
     }
     setSyncStatus("ok", "Connected & synced");
     render();
