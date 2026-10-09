@@ -245,7 +245,7 @@ function wireLockScreen() {
     statusEl.textContent = "Connecting…";
     const config = { owner, repo, token, tokenExpires: byId("gh-expires").value || null };
     try {
-      const { data, sha } = await syncPull(config);
+      const { data, sha } = await syncPull(config, { preferRemotePassphrase: true });
       saveGithubConfig(config);
       state.githubConfig = config;
       checkRepoVisibility(true);
@@ -976,6 +976,12 @@ function renderSettings() {
         </select>
       </div>
       <button class="btn btn-large" data-action="export-csv">Download Spreadsheet (CSV)</button>
+    </div>
+
+    <div class="settings-section">
+      <h2>❓ Help</h2>
+      <p class="help-text">A one-page guide to every screen, ready to print.</p>
+      <a class="btn btn-large" href="help.html">Open the Quick Guide</a>
     </div>
 
     <div class="settings-section">
@@ -1780,16 +1786,18 @@ async function handleSaveGithubConfig() {
   const config = { owner, repo, token, tokenExpires: byId("set-gh-expires").value || null };
   setSyncStatus("syncing", "Connecting…");
   try {
-    const { data, sha } = await syncPull(config);
+    const hashBefore = state.data.passphraseHash;
+    const { data, sha } = await syncPull(config, { preferRemotePassphrase: true });
     saveGithubConfig(config);
     state.githubConfig = config;
     state.data = data;
     state.sha = sha;
+    const usesFamilyPassphrase = sha !== null && data.passphraseHash !== hashBefore;
     if (sha === null) {
       state.sha = await syncPush(config, state.data, null);
       showToast("Connected to GitHub — this device's data was backed up");
     } else {
-      showToast("Connected to GitHub");
+      showToast(usesFamilyPassphrase ? "Connected — this device now uses the family passphrase from GitHub" : "Connected to GitHub");
       setDirty(true);
       scheduleSync(); // anything this device already had goes up too
     }

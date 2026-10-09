@@ -2,7 +2,7 @@
    the network (so updates always show up); offline, the last copy is used.
    Calls to GitHub's API are never touched. */
 const CACHE = "family-budget-v1";
-const FILES = ["./", "index.html", "css/styles.css", "js/calculations.js", "js/storage.js", "js/app.js", "favicon.svg", "icon-192.png", "icon-512.png", "manifest.json"];
+const FILES = ["./", "index.html", "help.html", "css/styles.css", "js/calculations.js", "js/storage.js", "js/app.js", "favicon.svg", "icon-192.png", "icon-512.png", "manifest.json"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(FILES)).then(() => self.skipWaiting()));

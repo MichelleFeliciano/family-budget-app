@@ -1325,3 +1325,65 @@ test("css: phone and accessibility safeguards", () => {
   const fonts = [...css.matchAll(/(?:^|\n)\s*([^{}\n]+)\{[^}]*font-size:\s*(\d+)px/g)].map((m) => m[1].trim());
   assert.deepEqual(fonts, ["html", 'html[data-text-size="large"]', 'html[data-text-size="xlarge"]'], "the only pixel font sizes are the three root sizes; everything else scales");
 });
+
+/* ------------------------------------------------------------------ */
+test("connecting a new phone: the family's passphrase on GitHub wins over one the phone just made", async () => {
+  store.clear();
+  const remote = mk({ passphraseHash: "FAMILY", lastUpdated: "2026-10-01T00:00:00.000Z", transactions: [{ id: "r1" }] });
+  saveLocalData(mk({ passphraseHash: "JUST-MADE", lastUpdated: "2026-10-09T00:00:00.000Z", transactions: [{ id: "l1" }] })); // newer, so it would normally win
+  globalThis.fetch = fakeGithub(remote).fetch;
+  const plain = await syncPull(cfg);
+  assert.equal(plain.data.passphraseHash, "JUST-MADE", "an ordinary sync keeps this device's passphrase (a deliberate Change Passphrase must win)");
+  saveLocalData(mk({ passphraseHash: "JUST-MADE", lastUpdated: "2026-10-09T00:00:00.000Z", transactions: [{ id: "l1" }] }));
+  const connecting = await syncPull(cfg, { preferRemotePassphrase: true });
+  assert.equal(connecting.data.passphraseHash, "FAMILY", "connecting uses GitHub's");
+  assert.deepEqual(connecting.data.transactions.map((t) => t.id).sort(), ["l1", "r1"], "and still merges both devices' entries");
+  assert.equal(loadLocalData().passphraseHash, "FAMILY", "and saves it");
+  // nothing on GitHub to prefer: the device keeps its own
+  store.clear(); saveLocalData(mk({ passphraseHash: "MINE" }));
+  globalThis.fetch = fakeGithub(mk({ passphraseHash: null, lastUpdated: "2026-01-01T00:00:00.000Z" })).fetch;
+  assert.equal((await syncPull(cfg, { preferRemotePassphrase: true })).data.passphraseHash, "MINE");
+  globalThis.fetch = fakeGithub(null).fetch;
+  assert.equal((await syncPull(cfg, { preferRemotePassphrase: true })).data.passphraseHash, "MINE", "no file on GitHub yet");
+  const app = read("js/app.js");
+  assert.equal((app.match(/syncPull\(config, \{ preferRemotePassphrase: true \}\)/g) || []).length, 2, "both connect forms use it");
+});
+
+/* ------------------------------------------------------------------ */
+test("quick guide: a standalone printable page that works offline and is reachable from Settings", () => {
+  const html = read("help.html");
+  assert.match(html, /<html lang="en">/);
+  assert.match(html, /<meta name="viewport"/);
+  assert.match(html, /<title>Quick Guide/);
+  assert.doesNotMatch(html, /(src|href)="https?:/, "no outside files — it must work offline");
+  assert.doesNotMatch(html, /<link rel="stylesheet"/, "it carries its own styles (the app's print rules would blank it)");
+  for (const heading of ["Getting started", "Home", "Budget", "Log", "Debt", "Settings", "Made a mistake?", "If the top line says", "Need help?"])
+    assert.ok(html.includes(heading), `missing section: ${heading}`);
+  assert.match(html, /@media print/);
+  assert.match(html, /\.no-print\s*\{\s*display:\s*none/);
+  assert.ok(read("sw.js").includes('"help.html"'), "cached for offline use");
+  assert.match(read("js/app.js"), /<a class="btn btn-large" href="help\.html">Open the Quick Guide<\/a>/);
+  assert.doesNotMatch(html + read("RECOVERY.md"), /github_pat_|ghp_[A-Za-z0-9]{10,}/, "no tokens");
+});
+
+test("quick guide: every name the guide uses for a button or screen exists in the app", () => {
+  const html = read("help.html"), app = read("js/app.js");
+  for (const label of ["Mark Paid", "Add Money", "+ Add a Transaction", "Log Payment", "Download Backup", "Lock This Device Now", "Print Bills List", "Undo", "Unlock", "Text Size", "Search", "Debt-Free Date", "This Pay Period", "Your Bills", "Savings Goals"]) {
+    assert.ok(html.includes(label), `guide doesn't mention ${label}`);
+    assert.ok(app.includes(label), `app has no "${label}", but the guide tells people to use it`);
+  }
+  const syncMessages = [...html.matchAll(/<td>([^<]+)<\/td><td>/g)].map((m) => m[1]);
+  assert.ok(syncMessages.some((m) => /^Synced$/.test(m)) && syncMessages.some((m) => /^Offline — saved here, will sync later$/.test(m)));
+  assert.ok(app.includes('"Synced"') && read("js/storage.js").includes("Offline — saved here, will sync later") && read("js/storage.js").includes("Token expired or rejected"), "the status lines the guide quotes are the real ones");
+});
+
+test("recovery guide: covers every situation it promises, and its section links resolve", () => {
+  const md = read("RECOVERY.md");
+  const headings = [...md.matchAll(/^## (.+)$/gm)].map((m) => m[1]);
+  const slug = (h) => h.toLowerCase().replace(/[^\w\s-]/g, "").trim().replace(/\s+/g, "-");
+  const anchors = new Set(headings.map(slug));
+  for (const m of md.matchAll(/\]\(#([\w-]+)\)/g)) assert.ok(anchors.has(m[1]), `broken link #${m[1]}`);
+  for (const needle of ["Token expired", "passphraseHash", "Restore from Backup", "Download Backup", "Sync Now", "family-budget-data", "Contents → Read and write", "Delete"])
+    assert.ok(md.includes(needle), `RECOVERY.md doesn't mention ${needle}`);
+  assert.ok(read("README.md").includes("RECOVERY.md"));
+});

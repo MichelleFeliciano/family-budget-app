@@ -385,11 +385,21 @@ function mergeData(localRaw, remoteRaw) {
   };
 }
 
-async function syncPull(config) {
+/**
+ * Downloads the shared file and merges it with this device's copy. When a device
+ * is being connected to GitHub for the first time, pass preferRemotePassphrase:
+ * the family's passphrase on GitHub must win over one this device only just
+ * created, or connecting a new phone would lock everyone else out.
+ */
+async function syncPull(config, { preferRemotePassphrase = false } = {}) {
   const { data: remote, sha } = await githubFetchFile(config);
   const local = loadLocalData();
   if (!remote) return { data: local, sha: null };
   const merged = mergeData(local, remote);
+  if (preferRemotePassphrase) {
+    const remotePassphrase = sanitizeData(remote).passphraseHash;
+    if (remotePassphrase) merged.passphraseHash = remotePassphrase;
+  }
   saveLocalData(merged);
   return { data: merged, sha };
 }

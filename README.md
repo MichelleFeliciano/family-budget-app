@@ -162,6 +162,16 @@ Changes made on two devices at once are **merged**, not overwritten: bills,
 payments, and everything else added on each device are kept. Deletions are
 remembered so a deleted item doesn't come back.
 
+## Guides for the family
+
+- **Quick Guide** — a one-page, large-print guide to every screen, built into the
+  app (Settings → *Open the Quick Guide*, or `help.html`). It has a Print button,
+  works offline, and leaves blanks to write in the family tech helper's name and
+  number.
+- **[RECOVERY.md](RECOVERY.md)** — for whoever looks after the app: what to do about
+  an expired token, a forgotten passphrase, an empty phone, something deleted by
+  mistake, a lost phone, and setting up a new one.
+
 ## For whoever maintains this
 
 - Run the automated checks (Node 20+, nothing to install): `node tests/run-tests.js`.

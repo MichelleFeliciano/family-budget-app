@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="color-scheme" content="light dark">
+<title>Quick Guide — Our Family Budget</title>
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<style>
+  /* Stands on its own (no other files needed) so it prints and works offline. */
+  :root {
+    --bg: #faf8f5; --card: #ffffff; --border: #e3ded3; --text: #2b2926; --muted: #5f584d;
+    --primary: #3f6b58; --on-primary: #ffffff; --tint: #e7efe9; --warn-bg: #faf1de; --warn: #7a540c;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #22201d; --card: #2c2a26; --border: #47433c; --text: #f3f0ea; --muted: #b8b1a4;
+      --primary: #6fa78e; --on-primary: #10160b; --tint: #2a3a32; --warn-bg: #3a3122; --warn: #d9ab52;
+    }
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    font-size: 13pt; line-height: 1.4; overflow-wrap: anywhere;
+  }
+  main { max-width: 7.5in; margin: 0 auto; padding: 16px; }
+  header { display: flex; align-items: center; gap: 12px; margin-bottom: 4px; }
+  header img { width: 44px; height: 44px; flex: none; }
+  h1 { font-size: 20pt; line-height: 1.15; margin: 0; }
+  .where { color: var(--muted); font-size: 11.5pt; margin: 2px 0 12px; }
+  .actions { display: flex; gap: 10px; flex-wrap: wrap; margin: 0 0 14px; }
+  .actions a, .actions button {
+    display: inline-flex; align-items: center; justify-content: center; min-height: 48px; padding: 8px 18px;
+    border-radius: 8px; border: 1px solid var(--border); background: var(--card); color: var(--text);
+    font: inherit; font-size: 13pt; font-weight: 600; text-decoration: none; cursor: pointer;
+  }
+  .actions .primary { background: var(--primary); border-color: var(--primary); color: var(--on-primary); }
+  .grid { column-count: 2; column-gap: 14px; }
+  section { break-inside: avoid; background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 8px 12px 6px; margin: 0 0 10px; }
+  h2 { font-size: 14pt; line-height: 1.2; margin: 0 0 4px; }
+  ul { margin: 0 0 4px; padding-left: 1.15em; }
+  li { margin: 0 0 3px; }
+  b { font-weight: 700; }
+  .help { background: var(--tint); }
+  .status { width: 100%; border-collapse: collapse; font-size: 12pt; }
+  .status td { padding: 4px 0; border-top: 1px solid var(--border); vertical-align: top; }
+  .status td:first-child { font-weight: 700; padding-right: 8px; width: 42%; }
+  .tech { background: var(--warn-bg); border-color: var(--warn); }
+  .tech p { margin: 0 0 6px; }
+  .line { display: inline-block; min-width: 2.2in; border-bottom: 1.5px solid var(--text); }
+  @media (max-width: 640px) { .grid { column-count: 1; } body { font-size: 14pt; } }
+  @media print {
+    @page { margin: 0.5in; }
+    html, body { background: #ffffff; color: #000000; }
+    :root { --card: #ffffff; --border: #777777; --text: #000000; --muted: #222222; --tint: #ffffff; --warn-bg: #ffffff; --warn: #000000; --primary: #000000; }
+    body { font-size: 12pt; line-height: 1.3; }
+    main { padding: 0; max-width: none; }
+    .no-print { display: none !important; }
+    h1 { font-size: 18pt; }
+    .where { margin-bottom: 8px; font-size: 11pt; }
+    h2 { font-size: 13pt; }
+    section { border: 1.5px solid #000000; padding: 6px 10px 3px; margin-bottom: 8px; }
+    li { margin-bottom: 2px; }
+    .status { font-size: 11.5pt; }
+    h1, h2 { color: #000000; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <img src="favicon.svg" alt="">
+    <h1>Our Family Budget — Quick Guide</h1>
+  </header>
+  <p class="where">The website: <b id="where">the link you were given</b></p>
+
+  <div class="actions no-print">
+    <a class="primary" href="index.html">← Back to the budget</a>
+    <button type="button" id="print-btn">🖨️ Print this page</button>
+  </div>
+
+  <div class="grid">
+    <section>
+      <h2>Getting started</h2>
+      <ul>
+        <li>Open the link, type the <b>passphrase</b>, tap <b>Unlock</b>.</li>
+        <li>On a phone, add the page to your <b>Home Screen</b> so it opens like an app.</li>
+        <li>The little line at the top tells you if your changes are saved.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>🏠 Home</h2>
+      <ul>
+        <li><b>Bills</b> due this week are at the top. Tap <b>Mark Paid</b> when you pay one.</li>
+        <li>Shows this month’s income, spending and what’s left over.</li>
+        <li><b>Savings Goals:</b> tap <b>Add Money</b> as you save.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>📊 Budget</h2>
+      <ul>
+        <li>Type how much you plan to spend in each category.</li>
+        <li><b>This Pay Period</b> shows what’s due before the next paycheck.</li>
+        <li><b>Your Bills:</b> tap <b>Mark Paid</b>. <b>Print Bills List</b> makes a big-print copy for the fridge.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>🧾 Log</h2>
+      <ul>
+        <li>Every purchase and paycheck. Tap <b>+ Add a Transaction</b>.</li>
+        <li>Tap the ✏️ pencil to fix or delete one.</li>
+        <li>Use <b>Search</b> to find a store or an amount.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>💳 Debt</h2>
+      <ul>
+        <li>Add each debt. Tap <b>Log Payment</b> when you pay it.</li>
+        <li><b>Debt-Free Date</b> shows about when you’ll be done.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>⚙️ Settings</h2>
+      <ul>
+        <li><b>Text Size:</b> Normal, Large or Extra large.</li>
+        <li><b>Download Backup</b> keeps a safe copy of everything.</li>
+        <li><b>Lock This Device Now</b> if you lend your phone.</li>
+      </ul>
+    </section>
+
+    <section class="help">
+      <h2>Made a mistake?</h2>
+      <ul>
+        <li>Deleted something? Tap <b>Undo</b> — it shows for 8 seconds.</li>
+        <li>Marked a bill paid by accident? Tap <b>Undo</b> next to it.</li>
+        <li>Tap the ✏️ pencil on anything to change it.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>If the top line says…</h2>
+      <table class="status">
+        <tr><td>Synced</td><td>All saved and shared. Nothing to do.</td></tr>
+        <tr><td>Offline — saved here, will sync later</td><td>That’s fine. It saves to everyone once you have internet.</td></tr>
+        <tr><td>Token expired, or can’t find the repository</td><td>Call the family tech helper. <b>Nothing is lost.</b></td></tr>
+      </table>
+    </section>
+
+    <section class="tech">
+      <h2>Need help?</h2>
+      <p>Family tech helper: <span class="line">&nbsp;</span></p>
+      <p>Phone: <span class="line">&nbsp;</span></p>
+    </section>
+  </div>
+</main>
+<script>
+  // Show this site's own address, so the printed copy says where to go.
+  (function () {
+    var where = document.getElementById("where");
+    if (where && /^https?:/.test(location.href)) where.textContent = location.href.replace(/help\.html.*$/, "");
+    var btn = document.getElementById("print-btn");
+    if (btn) btn.addEventListener("click", function () { window.print(); });
+  })();
+</script>
+</body>
+</html>

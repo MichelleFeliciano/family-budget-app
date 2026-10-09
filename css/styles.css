@@ -120,6 +120,7 @@ input, select, textarea {
   font-weight: 600;
   transition: background 0.15s ease, transform 0.05s ease;
 }
+a.btn { text-decoration: none; }
 .btn:where(:hover:not(:disabled)) { background: var(--color-surface-alt); }
 .btn:active { transform: scale(0.98); }
 .btn:disabled { opacity: 0.45; cursor: not-allowed; }
