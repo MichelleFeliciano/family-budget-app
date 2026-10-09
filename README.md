@@ -23,22 +23,29 @@ to the public repository: the app will show a red warning if it detects that.
 ## What's inside
 
 - **Home** — **Coming Up** shows the bills due in the next 7 days that aren't
-  paid yet, each with a *Mark Paid* button. Then this month's income, spending,
+  paid yet, each with a *Mark Paid* button, plus any bill from earlier this
+  month that isn't marked paid (tap *Mark Paid* if it was already paid, so it's
+  recorded). **Savings Goals** shows progress toward things you're saving for;
+  *Add Money* records it in the Log as a Savings expense. Then this month's income, spending,
   what's left over, and total debt. Each spending category says how it compares with last month, and **Month by
   Month** lists the last 6 (or 12) months side by side — tap one to open it.
 - **Budget** — plan how much to spend in each category and see what you've
-  actually spent. Below it:
+  actually spent. A month you haven't planned yet starts with the most recent
+  plan, so amounts don't need retyping each month; change any amount to make
+  that month its own. Below it:
   - **This Pay Period** — tell it when you get paid (weekly, every 2 weeks,
     twice a month, or monthly) and it lists the bills due before the next
     paycheck, what's already paid, and how much is still to pay. You can mark
-    a bill paid right from there.
+    a bill paid right from there. If regular paychecks are set up, it also shows
+    the paychecks landing in the period minus its bills — what's left to spend.
   - **Regular Paychecks** — enter a paycheck once (who, how much, how often)
     and it is added to the Log as income on every payday, on any device that
     opens the app. Paychecks start from the day you set them up; earlier ones
     can be added by hand. Edit a paycheck's amount any time — it applies to
     future paydays only. Deleting a paycheck from the Log keeps it deleted.
   - **Your Bills** — each bill on its own with an amount, due day, and category
-    (change the category right in the list). Check bills off with *Mark Paid*,
+    (change the category right in the list). Check bills off with *Mark Paid* (it offers the last amount paid, handy for
+    bills that change),
     sort the list by due day, name or category, and optionally link a bill to a
     debt so paying it also lowers that debt's balance. **Print Bills List**
     makes a large-print sheet (all bills this month, or just those due before
@@ -157,7 +164,7 @@ remembered so a deleted item doesn't come back.
   They cover the budget and pay-period math (including evenings and daylight
   saving), regular paychecks (every frequency, no duplicates across devices),
   the month-by-month figures, the printable list, undo, the debt-free
-  projection, Log search, the sync merge logic,
+  projection, Log search, carried-over budgets, overdue bills, savings goals, the sync merge logic,
   backup/restore, the offline service worker, bill and debt linking, and color
   contrast in light and dark mode.
 - Deploying is just pushing to `master`; GitHub Pages publishes it in about a

@@ -316,6 +316,9 @@ function handleViewClick(e) {
     case "log-payment": openLogPaymentModal(state.data.debts.find((d) => d.id === btn.dataset.id)); break;
     case "open-pay-schedule": openPayScheduleModal(); break;
     case "clear-search": state.txnQuery = ""; render(); byId("txn-search").focus(); break;
+    case "open-add-goal": openGoalModal(null); break;
+    case "edit-goal": openGoalModal(state.data.goals.find((g) => g.id === btn.dataset.id)); break;
+    case "add-to-goal": openAddToGoalModal(state.data.goals.find((g) => g.id === btn.dataset.id)); break;
     case "open-add-paycheck": openPaycheckModal(null); break;
     case "edit-paycheck": openPaycheckModal(state.data.recurringIncome.find((p) => p.id === btn.dataset.id)); break;
     case "open-month": state.month = btn.dataset.month; render(); window.scrollTo(0, 0); break;
@@ -351,8 +354,8 @@ function handleViewChange(e) {
     const catId = el.dataset.categoryId;
     const value = Math.abs(Number(el.value) || 0);
     mutateData((d) => {
-      if (!d.budgetPlan[state.month]) d.budgetPlan[state.month] = {};
-      d.budgetPlan[state.month][catId] = value;
+      // The first change in a month that was showing a carried-over plan saves the whole plan for this month.
+      d.budgetPlan[state.month] = { ...planForMonth(d.budgetPlan, state.month).plan, [catId]: value };
     }, { render: false });
     // Redrawing destroys the input the user is tabbing into, which dropped
     // their place after every amount. Wait for focus to land on the next
@@ -480,9 +483,45 @@ function renderDashboard() {
       <h2>Spending by Category</h2>
       ${anySpending ? bars : '<p class="empty-state">No expenses logged yet this month.</p>'}
     </div>
+    ${renderGoalsCard()}
     ${renderHistoryCard()}
     <button class="btn btn-primary btn-large" data-action="open-add-transaction">+ Add a Transaction</button>
   `;
+}
+
+// Savings goals with a progress bar and an Add Money button.
+function renderGoalsCard() {
+  const goals = state.data.goals;
+  if (!goals.length) {
+    return `
+      <div class="card">
+        <h2>🐷 Savings Goals</h2>
+        <p class="help-text">Saving up for something? Add a goal and watch it grow.</p>
+        <button class="btn btn-large" data-action="open-add-goal">+ Add a Savings Goal</button>
+      </div>`;
+  }
+  const items = goals.map((g) => {
+    const saved = goalSaved(state.data, g);
+    const target = Number(g.target) || 0;
+    const pct = target > 0 ? Math.min(100, Math.round((saved / target) * 100)) : 0;
+    const done = target > 0 && saved >= target;
+    return `
+      <div class="goal-item">
+        <div class="goal-head"><strong>${escapeHtml(g.name)}</strong>${done ? '<span class="focus-badge">🎉 Goal reached!</span>' : ""}</div>
+        <div class="debt-progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}" aria-label="${escapeHtml(g.name)} progress"><div class="goal-fill" style="width:${pct}%;"></div></div>
+        <div class="goal-meta">${formatMoney(saved)} of ${formatMoney(target)} (${pct}%)${!done && target > saved ? ` • ${formatMoney(target - saved)} to go` : ""}</div>
+        <div class="debt-actions">
+          <button class="btn btn-primary" data-action="add-to-goal" data-id="${g.id}">Add Money</button>
+          <button class="btn" data-action="edit-goal" data-id="${g.id}">Edit</button>
+        </div>
+      </div>`;
+  }).join("");
+  return `
+    <div class="card">
+      <h2>🐷 Savings Goals</h2>
+      ${items}
+      <button class="btn btn-link" data-action="open-add-goal">+ Add another goal</button>
+    </div>`;
 }
 
 // Bills due in the next week that haven't been paid, with a Mark Paid button.
@@ -491,21 +530,28 @@ function renderComingUpCard() {
   const today = new Date();
   const soon = billsComingUp(state.data.bills, state.data.transactions, today, 7);
   const unpaid = soon.filter((x) => !x.paid);
+  const late = overdueBills(state.data.bills, state.data.transactions, today);
   const paidCount = soon.length - unpaid.length;
   const total = roundCents(unpaid.reduce((sum, { bill }) => sum + Number(bill.amount || 0), 0));
-  const rows = unpaid.map(({ bill, date }) => `
+  const row = (bill, label, dueDate) => `
     <div class="bill-item">
       <div class="bill-main">
         <div class="bill-name">${escapeHtml(bill.name)}</div>
-        <div class="bill-meta"><strong>${dayLabel(date, today)}</strong> • ${formatMoney(bill.amount)}</div>
+        <div class="bill-meta"><strong>${label}</strong> • ${formatMoney(bill.amount)}</div>
       </div>
-      <button class="btn btn-primary" data-action="mark-bill-paid" data-id="${bill.id}" data-due="${toLocalISODate(date)}">Mark Paid</button>
-    </div>`).join("");
+      <button class="btn btn-primary" data-action="mark-bill-paid" data-id="${bill.id}" data-due="${toLocalISODate(dueDate)}">Mark Paid</button>
+    </div>`;
+  const lateBlock = late.length ? `
+      <h3 class="overdue-title">Not marked paid yet</h3>
+      <p class="help-text">These were due earlier this month. If you already paid them, tap Mark Paid so it's recorded.</p>
+      ${late.map(({ bill, date }) => row(bill, `Was due ${formatShortDate(date)}`, date)).join("")}
+      <h3 class="upcoming-title">Next 7 days</h3>` : "";
   return `
     <div class="card coming-up">
-      <h2>⏰ Coming Up — Next 7 Days</h2>
-      ${unpaid.length ? rows : `<p class="help-text">${soon.length ? "Everything due this week is paid ✓" : "No bills are due in the next 7 days."}</p>`}
-      ${unpaid.length ? `<div class="budget-total-row"><span>Still to pay</span><span>${formatMoney(total)}</span></div>` : ""}
+      <h2>⏰ ${late.length ? "Bills" : "Coming Up — Next 7 Days"}</h2>
+      ${lateBlock}
+      ${unpaid.length ? unpaid.map(({ bill, date }) => row(bill, dayLabel(date, today), date)).join("") : `<p class="help-text">${soon.length ? "Everything due this week is paid ✓" : "No bills are due in the next 7 days."}</p>`}
+      ${unpaid.length ? `<div class="budget-total-row"><span>Still to pay this week</span><span>${formatMoney(total)}</span></div>` : ""}
       ${unpaid.length && paidCount ? `<p class="help-text">${paidCount} more already paid ✓</p>` : ""}
     </div>`;
 }
@@ -539,7 +585,7 @@ function renderHistoryCard() {
 
 function renderBudget() {
   const cats = state.data.categories.filter((c) => c.type === "expense");
-  const plan = state.data.budgetPlan[state.month] || {};
+  const { plan, from: planFrom } = planForMonth(state.data.budgetPlan, state.month);
 
   const rows = cats.map((c) => {
     const planned = Number(plan[c.id] || 0);
@@ -569,6 +615,7 @@ function renderBudget() {
     <div class="card">
       <h2>Monthly Budget</h2>
       <p class="help-text">Type how much you plan to spend in each category. We'll fill in what you've actually spent.</p>
+      ${planFrom ? `<p class="help-text carry-note">Showing ${escapeHtml(formatMonthLabel(planFrom))}'s plan. Change any amount to make this month's own.</p>` : ""}
       ${cats.length ? rows : '<p class="empty-state">No expense categories yet. Add one in Settings.</p>'}
       <div class="budget-total-row">
         <span>Total Spent</span>
@@ -605,6 +652,19 @@ function renderPaychecksSection() {
       <p class="help-text">Add a paycheck once and it is put in your Log as income on every payday.</p>
       ${sources.length ? rows : ""}
       <button class="btn btn-primary btn-large" style="margin-top:12px;" data-action="open-add-paycheck">+ Add a Paycheck</button>
+    </div>`;
+}
+
+// Paychecks landing in this pay period, minus the bills due in it.
+function renderCashFlow() {
+  const flow = periodCashFlow(state.data, new Date());
+  if (!flow) return "";
+  return `
+    <div class="cash-flow">
+      <div class="flow-row"><span>Paychecks this period</span><span>${formatMoney(flow.income)}</span></div>
+      <div class="flow-names">${flow.paychecks.map((p) => `${escapeHtml(p.name)}, ${shortISODate(p.date)}`).join(" • ")}</div>
+      <div class="flow-row"><span>Bills due</span><span>− ${formatMoney(flow.bills)}</span></div>
+      <div class="flow-row flow-left"><span>${flow.left >= 0 ? "Left after bills" : "Short by"}</span><span class="${flow.left >= 0 ? "positive" : "negative"}">${formatMoney(Math.abs(flow.left))}</span></div>
     </div>`;
 }
 
@@ -655,6 +715,7 @@ function renderPayPeriodSection() {
       ${result.due.length ? rows : '<p class="empty-state">No bills with a due date fall in this pay period.</p>'}
       ${result.due.length ? `<div class="budget-total-row"><span>${allPaid ? "All paid ✓" : "Still to pay"}</span><span>${formatMoney(result.remaining)}</span></div>
       <p class="help-text">Total due this pay period: ${formatMoney(result.total)}</p>` : ""}
+      ${renderCashFlow()}
       ${result.noDueDay.length ? `<p class="help-text" style="margin-top:12px;">${result.noDueDay.length} bill${result.noDueDay.length === 1 ? "" : "s"} skipped here because they have no due date set: ${result.noDueDay.map((b) => escapeHtml(b.name)).join(", ")}</p>` : ""}
       <button class="btn btn-link" data-action="open-pay-schedule">Change payday settings</button>
     </div>`;
@@ -970,6 +1031,7 @@ function openTransactionModal(existing) {
   byId("txn-form").addEventListener("submit", (e) => {
     e.preventDefault();
     const updated = {
+      ...(isEdit ? txn : {}),
       id: isEdit ? txn.id : uid(),
       type: currentType,
       date: byId("txn-date").value,
@@ -978,6 +1040,8 @@ function openTransactionModal(existing) {
       amount: Math.abs(Number(byId("txn-amount").value) || 0),
       debtId: isEdit ? txn.debtId : undefined,
     };
+    // A bill payment or savings entry is an expense; if it was turned into income it's no longer one.
+    if (isEdit && txn.type !== currentType) { delete updated.billId; delete updated.goalId; delete updated.paycheckId; }
     mutateData((d) => {
       if (isEdit) {
         const idx = d.transactions.findIndex((t) => t.id === txn.id);
@@ -1249,6 +1313,100 @@ function openPayScheduleModal() {
   });
 }
 
+function openGoalModal(existing) {
+  const isEdit = !!existing;
+  const goal = existing || { name: "", target: "", startAmount: "" };
+
+  openModal(`
+    <h2>${isEdit ? "Edit" : "Add"} Savings Goal</h2>
+    <form id="goal-form">
+      <div class="form-group">
+        <label for="goal-name">What are you saving for?</label>
+        <input type="text" id="goal-name" value="${escapeHtml(goal.name)}" placeholder="e.g. Vacation" required>
+      </div>
+      <div class="form-group">
+        <label for="goal-target">Goal amount</label>
+        <input type="number" id="goal-target" min="0.01" step="0.01" value="${goal.target}" placeholder="0.00" required>
+      </div>
+      <div class="form-group">
+        <label for="goal-start">Already saved (optional)</label>
+        <input type="number" id="goal-start" min="0" step="0.01" value="${goal.startAmount || ""}" placeholder="0.00">
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="btn" data-action="modal-cancel">Cancel</button>
+        <button type="submit" class="btn btn-primary">${isEdit ? "Save" : "Add"}</button>
+      </div>
+      ${isEdit ? '<button type="button" class="btn btn-danger btn-large" style="margin-top:10px;" id="goal-delete-btn">Delete Goal</button>' : ""}
+    </form>
+  `);
+
+  byId("goal-form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const updated = {
+      id: isEdit ? goal.id : uid(),
+      name: byId("goal-name").value.trim(),
+      target: Math.abs(Number(byId("goal-target").value) || 0),
+      startAmount: Math.abs(Number(byId("goal-start").value) || 0),
+    };
+    if (!(updated.target > 0)) { showToast("Enter the goal amount."); return; }
+    mutateData((d) => {
+      if (isEdit) {
+        const idx = d.goals.findIndex((g) => g.id === goal.id);
+        if (idx > -1) d.goals[idx] = updated;
+      } else {
+        d.goals.push(updated);
+      }
+    });
+    closeModal();
+    showToast(isEdit ? "Goal updated" : "Goal added");
+  });
+
+  if (isEdit) {
+    byId("goal-delete-btn").addEventListener("click", () => {
+      confirmAction(`Delete "${goal.name}"? Money you already added stays in your Log.`, () => {
+        deleteWithUndo("Goal deleted", (d) => {
+          d.goals = d.goals.filter((g) => g.id !== goal.id);
+          d.tombstones.push(`goal:${goal.id}`);
+        });
+        closeModal();
+      });
+    });
+  }
+}
+
+function openAddToGoalModal(goal) {
+  if (!goal) return;
+  openModal(`
+    <h2>Add Money: ${escapeHtml(goal.name)}</h2>
+    <form id="goal-add-form">
+      <div class="form-group">
+        <label for="goal-add-date">Date</label>
+        <input type="date" id="goal-add-date" value="${todayISO()}" required>
+      </div>
+      <div class="form-group">
+        <label for="goal-add-amount">Amount</label>
+        <input type="number" id="goal-add-amount" min="0.01" step="0.01" placeholder="0.00" required>
+      </div>
+      <p class="help-text">This is also recorded in your Log as a Savings expense.</p>
+      <div class="modal-actions">
+        <button type="button" class="btn" data-action="modal-cancel">Cancel</button>
+        <button type="submit" class="btn btn-primary">Add Money</button>
+      </div>
+    </form>
+  `);
+
+  byId("goal-add-form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const amount = Math.abs(Number(byId("goal-add-amount").value) || 0);
+    const date = byId("goal-add-date").value;
+    if (amount <= 0) return;
+    const wasDone = goalSaved(state.data, goal) >= goal.target;
+    mutateData((d) => { recordGoalContribution(d, goal, date, amount, uid()); });
+    closeModal();
+    showToast(!wasDone && goalSaved(state.data, goal) >= goal.target ? "🎉 You reached your goal!" : "Money added");
+  });
+}
+
 function frequencyOptions(selected) {
   return PAY_FREQUENCIES.map(([value, label]) => `<option value="${value}" ${value === selected ? "selected" : ""}>${escapeHtml(label)}</option>`).join("");
 }
@@ -1437,6 +1595,7 @@ function openBillModal(existing) {
     const dueDayVal = byId("bill-due-day").value;
     const updated = {
       id: isEdit ? bill.id : uid(),
+      addedOn: isEdit ? bill.addedOn : todayISO(),
       name: byId("bill-name").value.trim(),
       categoryId: byId("bill-category").value,
       debtId: byId("bill-debt") && byId("bill-debt").value ? byId("bill-debt").value : null,
@@ -1473,6 +1632,8 @@ function openMarkBillPaidModal(bill, dueISO) {
   // this one (paying early across a month end), default to the due date.
   const defaultDate = dueISO && monthKeyOf(dueISO) !== monthKeyOf(todayISO()) ? dueISO : todayISO();
   const linkedDebt = bill.debtId ? state.data.debts.find((d) => d.id === bill.debtId) : null;
+  const last = lastBillPayment(state.data.transactions, bill.id);
+  const showLast = !!last && Number(last.amount) !== Number(bill.amount);
   openModal(`
     <h2>Mark Paid: ${escapeHtml(bill.name)}</h2>
     <form id="bill-pay-form">
@@ -1484,6 +1645,7 @@ function openMarkBillPaidModal(bill, dueISO) {
         <label for="bill-pay-amount">Amount</label>
         <input type="number" id="bill-pay-amount" min="0.01" step="0.01" value="${bill.amount || ""}" required>
       </div>
+      ${showLast ? `<p class="help-text">Last paid ${formatMoney(last.amount)} on ${shortISODate(last.date)}. <button type="button" class="btn btn-link" id="bill-pay-use-last">Use that amount</button></p>` : ""}
       ${linkedDebt ? `<p class="help-text">This also lowers the <strong>${escapeHtml(linkedDebt.name)}</strong> balance by the same amount.</p>` : ""}
       <div class="modal-actions">
         <button type="button" class="btn" data-action="modal-cancel">Cancel</button>
@@ -1491,6 +1653,8 @@ function openMarkBillPaidModal(bill, dueISO) {
       </div>
     </form>
   `);
+
+  if (showLast) byId("bill-pay-use-last").addEventListener("click", () => { byId("bill-pay-amount").value = last.amount; });
 
   byId("bill-pay-form").addEventListener("submit", (e) => {
     e.preventDefault();

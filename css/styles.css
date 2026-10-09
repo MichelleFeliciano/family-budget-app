@@ -576,6 +576,21 @@ main#view-container {
 .debt-free-date { font-size: 1.8rem; font-weight: 700; color: var(--color-primary); margin-bottom: 6px; }
 #extra-debt-select { width: 100%; }
 
+.overdue-title { color: var(--color-warning); margin: 4px 0 2px; }
+.upcoming-title { margin: 16px 0 2px; }
+.carry-note { margin-top: -4px; }
+.cash-flow { margin-top: 14px; padding-top: 6px; border-top: 2px solid var(--color-border); }
+.flow-row { display: flex; justify-content: space-between; gap: 12px; padding: 6px 0; font-variant-numeric: tabular-nums; }
+.flow-row.flow-left { font-weight: 700; font-size: 1.1rem; border-top: 1px solid var(--color-border); margin-top: 4px; padding-top: 10px; }
+.flow-row .positive { color: var(--color-primary); }
+.flow-row .negative { color: var(--color-danger); }
+.flow-names { color: var(--color-text-muted); font-size: 0.9rem; margin: -2px 0 4px; }
+.goal-item { padding: 12px 0; border-bottom: 1px solid var(--color-border); }
+.goal-item:last-of-type { border-bottom: none; }
+.goal-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.goal-fill { height: 100%; background: var(--cat-savings); border-radius: 8px; }
+.goal-meta { color: var(--color-text-muted); font-size: 0.95rem; margin-bottom: 10px; }
+
 /* ---------- Large-print bills list ---------- */
 .print-modes { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
 .print-modes .btn { flex: 1 1 0; }

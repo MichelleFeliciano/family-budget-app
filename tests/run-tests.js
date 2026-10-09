@@ -774,8 +774,8 @@ test("sync is held back while Undo is on offer", () => {
   const app = read("js/app.js");
   assert.match(app, /state\.syncHoldUntil = Date\.now\(\) \+ UNDO_WINDOW_MS/);
   assert.match(app, /Math\.max\(1200, state\.syncHoldUntil - Date\.now\(\)\)/);
-  assert.equal((app.match(/deleteWithUndo\("/g) || []).length, 6, "transaction, payment, bill, debt, category, paycheck");
-  assert.doesNotMatch(app, /showToast\("(Transaction|Bill|Debt|Category|Paycheck|Payment) (deleted|removed)"\)/, "every delete offers Undo");
+  assert.equal((app.match(/deleteWithUndo\("/g) || []).length, 7, "transaction, payment, bill, debt, category, paycheck, goal");
+  assert.doesNotMatch(app, /showToast\("(Transaction|Bill|Debt|Category|Paycheck|Goal|Payment) (deleted|removed)"\)/, "every delete offers Undo");
 });
 
 test("debt-free date: one debt matches the payoff formula", () => {
@@ -844,4 +844,137 @@ test("search the Log: wired to type-as-you-go filtering without redrawing the bo
   assert.match(app, /e\.target\.id !== "txn-search"/);
   assert.match(app, /byId\("txn-results"\)\.innerHTML = renderTransactionResults\(\)/);
   assert.match(read("css/styles.css"), /\.toast-btn\s*\{[^}]*min-height:\s*var\(--touch-min\)/, "Undo button is a big target");
+});
+
+/* ------------------------------------------------------------------ */
+test("budget plan: a month with no plan uses the latest earlier plan", () => {
+  const plan = { "2026-08": { food: 300 }, "2026-09": { food: 350, bills: 100 }, "2026-11": { food: 1 } };
+  assert.deepEqual(planForMonth(plan, "2026-09"), { plan: plan["2026-09"], from: null }, "its own plan wins");
+  assert.deepEqual(planForMonth(plan, "2026-10"), { plan: plan["2026-09"], from: "2026-09" });
+  assert.equal(planForMonth(plan, "2027-03").from, "2026-11", "any number of months later");
+  assert.equal(planForMonth(plan, "2026-12").from, "2026-11");
+  assert.deepEqual(planForMonth(plan, "2026-07"), { plan: {}, from: null }, "never borrows from the future");
+  assert.equal(planForMonth({ "2026-10": {}, "2026-09": { food: 5 } }, "2026-10").from, "2026-09", "an empty plan counts as no plan");
+  assert.deepEqual(planForMonth({ junk: { a: 1 } }, "2026-10"), { plan: {}, from: null }, "keys that aren't months are ignored");
+  assert.deepEqual(planForMonth({}, "2026-10"), { plan: {}, from: null });
+});
+
+test("budget plan: the first change in a carried-over month saves the whole plan without touching the old one", () => {
+  const plan = { "2026-09": { food: 350, bills: 100 } };
+  plan["2026-10"] = { ...planForMonth(plan, "2026-10").plan, food: 400 };
+  assert.deepEqual(plan["2026-10"], { food: 400, bills: 100 });
+  assert.deepEqual(plan["2026-09"], { food: 350, bills: 100 });
+  assert.equal(planForMonth(plan, "2026-10").from, null, "now it has its own");
+  assert.equal(planForMonth(plan, "2026-11").plan.food, 400, "and next month carries October's");
+  plan["2026-10"] = { ...planForMonth(plan, "2026-10").plan, food: 0 };
+  assert.equal(planForMonth(plan, "2026-10").plan.food, 0, "typing 0 is a real choice, not 'unset'");
+});
+
+test("last paid: finds the most recent payment of that bill", () => {
+  const txns = [
+    { id: "1", billId: "b", date: "2026-08-05", amount: 100 }, { id: "2", billId: "b", date: "2026-09-05", amount: 142.1 },
+    { id: "3", billId: "c", date: "2026-09-20", amount: 9 }, { id: "4", date: "2026-09-21", amount: 7 },
+  ];
+  assert.equal(lastBillPayment(txns, "b").id, "2");
+  assert.equal(lastBillPayment(txns, "zzz"), null);
+  assert.equal(lastBillPayment([], "b"), null);
+  assert.equal(lastBillPayment([...txns, { id: "5", billId: "b", date: "2026-09-05", amount: 1 }], "b").id, "5", "same day: the later entry");
+  assert.equal(shortISODate("2026-09-05"), "Sep 5");
+  assert.equal(shortISODate("nope"), "");
+});
+
+test("not marked paid: only this month's bills whose due date has passed", () => {
+  const bills = [
+    { id: "rent", name: "Rent", dueDay: 1 }, { id: "phone", name: "Phone", dueDay: 3 }, { id: "water", name: "Water", dueDay: 15 },
+    { id: "gym", name: "Gym", dueDay: 5, addedOn: "2026-10-06" }, { id: "old", name: "Old", dueDay: 2, addedOn: "2026-09-01" },
+    { id: "nodue", name: "Netflix" }, { id: "today", name: "Today", dueDay: 8 },
+  ];
+  const txns = [{ id: "t", billId: "phone", date: "2026-10-04" }, { id: "u", billId: "rent", date: "2026-09-30" }];
+  const late = overdueBills(bills, txns, at("2026-10-08"));
+  assert.deepEqual(late.map((x) => [x.bill.name, ymd(x.date)]), [["Rent", "2026-10-01"], ["Old", "2026-10-02"]],
+    "Phone is paid; Gym was added after its date; today's bill isn't late yet; last month's payment doesn't count");
+  assert.deepEqual(overdueBills(bills, txns, at("2026-10-01")), [], "nothing is late on the 1st");
+  assert.deepEqual(overdueBills([{ id: "x", name: "X", dueDay: 31 }], [], at("2026-02-28")), [], "a 31st bill is due on the 28th in February, not late yet");
+  assert.equal(overdueBills([{ id: "x", name: "X", dueDay: 31 }], [], at("2026-04-30")).length, 0, "…or the 30th in April");
+  assert.deepEqual(overdueBills([], [], at("2026-10-08")), []);
+});
+
+const flowData = (over = {}) => mk({
+  paySchedule: pays("biweekly", "2026-10-02"),
+  recurringIncome: [dad, { id: "s2", name: "Mom's paycheck", amount: 800, frequency: "monthly", anchorDate: "2026-10-05", startedOn: "2026-10-05" }],
+  bills: [{ id: "w", name: "Water", amount: 45.25, dueDay: 10 }, { id: "r", name: "Rent", amount: 1000, dueDay: 1 }, { id: "p", name: "Phone", amount: 80, dueDay: 14 }],
+  ...over,
+});
+
+test("paychecks minus bills: this pay period's income, bills and what's left", () => {
+  const flow = periodCashFlow(flowData(), at("2026-10-09")); // pay period Oct 2 - Oct 15
+  assert.deepEqual(flow.paychecks.map((p) => [p.name, p.date, p.amount]), [["Dad's paycheck", "2026-10-02", 1500.5], ["Mom's paycheck", "2026-10-05", 800]]);
+  assert.equal(flow.income, 2300.5);
+  assert.equal(flow.bills, 125.25, "Water (10th) and Phone (14th); Rent isn't in this period");
+  assert.equal(flow.left, 2175.25);
+  const paid = periodCashFlow(flowData({ transactions: [{ id: "x", billId: "w", date: "2026-10-09" }] }), at("2026-10-09"));
+  assert.equal(paid.bills, 125.25, "a bill that's already paid still comes out of what the paycheck covers");
+  const short = periodCashFlow(flowData({ bills: [{ id: "r", name: "Rent", amount: 3000, dueDay: 12 }] }), at("2026-10-09"));
+  assert.equal(short.left, -699.5, "negative means short");
+});
+
+test("paychecks minus bills: stays quiet when it has nothing sensible to say", () => {
+  assert.equal(periodCashFlow(flowData({ paySchedule: null }), at("2026-10-09")), null, "no payday");
+  assert.equal(periodCashFlow(flowData({ recurringIncome: [] }), at("2026-10-09")), null, "no paychecks");
+  const far = flowData({ recurringIncome: [{ id: "s3", name: "Late", amount: 800, frequency: "monthly", anchorDate: "2026-10-20" }] });
+  assert.equal(periodCashFlow(far, at("2026-10-09")), null, "no paycheck lands in this period");
+  assert.equal(periodCashFlow(flowData({ recurringIncome: [{ ...dad, amount: 0 }] }), at("2026-10-09")), null, "zero-amount paychecks don't count");
+});
+
+const goalData = () => mk({ goals: [{ id: "g1", name: "Vacation", target: 1000, startAmount: 100 }, { id: "g2", name: "Car", target: 5000 }] });
+
+test("savings goals: progress is added up from tagged Savings entries in the Log", () => {
+  const data = goalData();
+  assert.equal(goalSaved(data, data.goals[0]), 100, "starts at what was already saved");
+  assert.equal(goalSaved(data, data.goals[1]), 0);
+  const txn = recordGoalContribution(data, data.goals[0], "2026-10-05", 250.5, "c1");
+  assert.deepEqual(txn, { id: "c1", type: "expense", date: "2026-10-05", categoryId: "savings", description: "Savings: Vacation", amount: 250.5, goalId: "g1" });
+  recordGoalContribution(data, data.goals[0], "2026-10-06", 0.1, "c2");
+  recordGoalContribution(data, data.goals[0], "2026-10-07", 0.2, "c3");
+  assert.equal(goalSaved(data, data.goals[0]), 350.8, "cents stay exact");
+  assert.equal(goalSaved(data, data.goals[1]), 0, "another goal is unaffected");
+  assert.equal(sumTransactions(data.transactions, { categoryId: "savings", type: "expense" }), 250.8, "it shows up as Savings spending");
+  removeTransaction(data, "c1");
+  assert.equal(goalSaved(data, data.goals[0]), 100.3, "deleting the entry in the Log lowers the goal");
+  data.transactions.find((t) => t.id === "c2").amount = 50;
+  assert.equal(goalSaved(data, data.goals[0]), 150.2, "so does editing it");
+});
+
+test("savings goals: falls back to another expense category if Savings was deleted", () => {
+  const data = mk({ goals: [{ id: "g1", name: "Trip", target: 10 }], categories: [{ id: "income", name: "Income", type: "income" }, { id: "fun", name: "Fun", type: "expense" }] });
+  assert.equal(recordGoalContribution(data, data.goals[0], "2026-10-05", 5, "c").categoryId, "fun");
+});
+
+test("savings goals: saved, merged, deleted, undone and restored like everything else", () => {
+  assert.deepEqual(defaultData().goals, []);
+  assert.deepEqual(sanitizeData({ goals: "oops" }).goals, []);
+  assert.deepEqual(sanitizeData({ goals: [{ id: "g" }, 3, null] }).goals, [{ id: "g" }]);
+  const a = goalData(), b = mk({ goals: [{ id: "g3", name: "Roof", target: 9 }], lastUpdated: "2026-02-01T00:00:00.000Z" });
+  assert.deepEqual(mergeData(a, b).goals.map((g) => g.id).sort(), ["g1", "g2", "g3"], "a goal added on each device is kept");
+  const gone = mergeData(goalData(), mk({ tombstones: ["goal:g1"], lastUpdated: "2026-05-01T00:00:00.000Z" }));
+  assert.deepEqual(gone.goals.map((g) => g.id), ["g2"], "a deletion on one device sticks");
+  const restored = restoreFromBackup(goalData(), sanitizeData({ categories: [], transactions: [], goals: [{ id: "g2", name: "Car", target: 5000 }] }));
+  assert.ok(restored.tombstones.includes("goal:g1") && !restored.tombstones.includes("goal:g2"));
+  const data = goalData();
+  const before = snapshotForUndo(data);
+  data.goals = data.goals.filter((g) => g.id !== "g1"); data.tombstones.push("goal:g1");
+  const after = snapshotForUndo(data);
+  undoDelete(data, before, after);
+  assert.deepEqual(data.goals.map((g) => g.id).sort(), ["g1", "g2"]);
+  assert.ok(!data.tombstones.includes("goal:g1"));
+});
+
+test("app wiring: carry-forward, last paid, not-marked-paid, cash flow and goals are hooked up", () => {
+  const app = read("js/app.js");
+  for (const needle of [
+    "planForMonth(d.budgetPlan, state.month).plan", "planForMonth(state.data.budgetPlan, state.month)",
+    "...(isEdit ? txn : {})", "delete updated.billId; delete updated.goalId", "addedOn: isEdit ? bill.addedOn : todayISO()",
+    "bill-pay-use-last", "overdueBills(", "renderCashFlow()", "periodCashFlow(", "renderGoalsCard()", "open-add-goal", "add-to-goal", "edit-goal",
+    "recordGoalContribution(d, goal",
+  ]) assert.ok(app.includes(needle), `app.js is missing ${needle}`);
 });

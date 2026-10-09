@@ -508,7 +508,7 @@ function dayLabel(date, today) {
 
 /* ---------- Undo for deletions ---------- */
 
-const UNDO_COLLECTIONS = ["transactions", "bills", "debts", "categories", "recurringIncome"];
+const UNDO_COLLECTIONS = ["transactions", "bills", "debts", "categories", "recurringIncome", "goals"];
 
 /** A copy of everything a deletion can touch, to compare before and after. */
 function snapshotForUndo(data) {
@@ -525,7 +525,8 @@ function snapshotForUndo(data) {
  */
 function undoDelete(data, before, after) {
   UNDO_COLLECTIONS.forEach((name) => {
-    const present = new Set((data[name] || []).map((r) => r.id));
+    if (!data[name]) data[name] = [];
+    const present = new Set(data[name].map((r) => r.id));
     const removedByDelete = (id) => !after[name].some((r) => r.id === id);
     before[name].forEach((record) => {
       if (!present.has(record.id) && removedByDelete(record.id)) data[name].push(record);
@@ -604,4 +605,101 @@ function searchTransactions(transactions, categories, query) {
     return words.every((w) => hay.includes(w.replace(/^\$/, "")));
   };
   return transactions.filter(matches).sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
+}
+
+/* ---------- Budget plan that carries forward ---------- */
+
+/**
+ * The planned amounts for a month. A month nobody has planned yet uses the
+ * most recent earlier month that has a plan, so the amounts don't have to be
+ * typed in again every month. `from` says which month they came from (null if
+ * the month has its own plan, or there is nothing to carry).
+ */
+function planForMonth(budgetPlan, monthKey) {
+  const has = (key) => budgetPlan[key] && typeof budgetPlan[key] === "object" && Object.keys(budgetPlan[key]).length > 0;
+  if (has(monthKey)) return { plan: budgetPlan[monthKey], from: null };
+  const earlier = Object.keys(budgetPlan).filter((k) => /^\d{4}-\d{2}$/.test(k) && k < monthKey && has(k)).sort();
+  if (!earlier.length) return { plan: {}, from: null };
+  const from = earlier[earlier.length - 1];
+  return { plan: budgetPlan[from], from };
+}
+
+/* ---------- Bills: last paid amount, not marked paid ---------- */
+
+/** The most recent payment logged for a bill, or null. */
+function lastBillPayment(transactions, billId) {
+  let best = null;
+  transactions.forEach((t) => {
+    if (t.billId === billId && (!best || t.date >= best.date)) best = t;
+  });
+  return best;
+}
+
+/** "Sep 5" from "2026-09-05". */
+function shortISODate(iso) {
+  const d = new Date(iso + "T00:00:00");
+  return isNaN(d) ? "" : d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+
+/**
+ * Bills whose due date this month has already gone by with no payment logged
+ * for the month. Only this month is looked at, and a bill added after its due
+ * date this month is not counted.
+ */
+function overdueBills(bills, transactions, today) {
+  const y = today.getFullYear();
+  const m = today.getMonth();
+  const todayStart = new Date(y, m, today.getDate());
+  const monthKey = toLocalISODate(todayStart).slice(0, 7);
+  const out = [];
+  bills.filter((b) => b.dueDay).forEach((bill) => {
+    const date = new Date(y, m, clampDayOfMonth(y, m, Number(bill.dueDay)));
+    if (date >= todayStart) return;
+    if (bill.addedOn && toLocalISODate(date) < bill.addedOn) return;
+    if (findBillPayment(transactions, bill.id, monthKey)) return;
+    out.push({ bill, date });
+  });
+  return out.sort((a, b) => a.date - b.date || String(a.bill.name).localeCompare(String(b.bill.name)));
+}
+
+/* ---------- Paychecks minus bills for this pay period ---------- */
+
+/**
+ * What's coming in and going out in the current pay period: the regular
+ * paychecks that land in it, the bills due in it, and what's left. Null when
+ * there is no payday set up or no paycheck falls in the period.
+ */
+function periodCashFlow(data, today) {
+  const period = getPayPeriod(data.paySchedule, today);
+  if (!period || !(data.recurringIncome || []).length) return null;
+  const startISO = toLocalISODate(period.start);
+  const endISO = toLocalISODate(lastDayOfPeriod(period.end));
+  const paychecks = [];
+  data.recurringIncome.forEach((src) => {
+    if (!(Number(src.amount) > 0)) return;
+    paydaysBetween(src, startISO, endISO).forEach((date) => paychecks.push({ name: src.name, date, amount: roundCents(src.amount) }));
+  });
+  if (!paychecks.length) return null;
+  paychecks.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+  const income = roundCents(paychecks.reduce((sum, p) => sum + p.amount, 0));
+  const bills = getBillsDueInPeriod(data.bills, data.paySchedule, today, data.transactions).total;
+  return { income, bills, left: roundCents(income - bills), paychecks };
+}
+
+/* ---------- Savings goals ----------
+   A goal ({id, name, target, startAmount}) is saved up by "Add money" entries,
+   which are ordinary Savings expenses in the Log tagged with the goal's id.
+   Progress is added up from them, so editing or deleting an entry in the Log
+   changes the goal too, with nothing to keep in step. */
+
+function goalSaved(data, goal) {
+  const added = data.transactions.filter((t) => t.goalId === goal.id).reduce((sum, t) => sum + Number(t.amount || 0), 0);
+  return roundCents(Number(goal.startAmount || 0) + added);
+}
+
+function recordGoalContribution(data, goal, date, amount, id) {
+  const category = data.categories.find((c) => c.id === "savings" && c.type === "expense") || data.categories.find((c) => c.type === "expense");
+  const txn = { id, type: "expense", date, categoryId: category ? category.id : "savings", description: `Savings: ${goal.name}`, amount, goalId: goal.id };
+  data.transactions.push(txn);
+  return txn;
 }
